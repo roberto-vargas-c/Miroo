@@ -32,12 +32,19 @@ enum LinkAccess {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String
-  passwordHash String
-  color        String   @default("#0ea5a4")
-  createdAt    DateTime @default(now())
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String
+  /// Null for accounts that only sign in with Google or SSO
+  passwordHash    String?
+  color           String    @default("#0ea5a4")
+  emailVerifiedAt DateTime?
+  /// Bumped to sign the user out everywhere (e.g. after a password reset)
+  sessionVersion  Int       @default(0)
+  createdAt       DateTime  @default(now())
+
+  identities Identity[]
+  authTokens AuthToken[]
 
   memberships WorkspaceMember[]
   teamMembers TeamMember[]
@@ -58,6 +65,9 @@ model Workspace {
   invites   Invite[]
   folders   Folder[]
   templates BoardTemplate[]
+  domains   WorkspaceDomain[]
+  sso       WorkspaceSso?
+  audit     AuditEvent[]
 }
 
 model WorkspaceMember {
@@ -224,4 +234,91 @@ model BoardTemplate {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
+}
+
+/// A sign-in identity from Google or a workspace's SSO provider.
+model Identity {
+  id        String   @id @default(cuid())
+  userId    String
+  /// "google" or "sso:<workspaceId>"
+  provider  String
+  subject   String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+}
+
+enum AuthTokenKind {
+  RESET_PASSWORD
+  VERIFY_EMAIL
+}
+
+/// One-time tokens sent by email. Only a hash of the token is stored.
+model AuthToken {
+  id        String        @id @default(cuid())
+  userId    String
+  kind      AuthTokenKind
+  tokenHash String        @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// An email domain a workspace has claimed. Verified with a DNS TXT record.
+model WorkspaceDomain {
+  id          String        @id @default(cuid())
+  workspaceId String
+  domain      String
+  verifyToken String
+  verifiedAt  DateTime?
+  /// People who sign up with a verified email at this domain join the workspace automatically
+  autoJoin    Boolean       @default(false)
+  joinRole    WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, domain])
+  @@index([domain])
+}
+
+/// OpenID Connect single sign-on for a workspace (Okta, Microsoft Entra ID, Google Workspace, Auth0…).
+model WorkspaceSso {
+  workspaceId     String   @id
+  issuer          String
+  clientId        String
+  /// Encrypted with a key derived from AUTH_SECRET
+  clientSecretEnc String
+  enabled         Boolean  @default(false)
+  /// Members with an email at a verified domain must use SSO instead of a password
+  enforce         Boolean  @default(false)
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+/// What happened in a workspace, for admins.
+model AuditEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  actorId     String?
+  actorName   String
+  action      String
+  targetType  String?
+  targetId    String?
+  targetName  String?
+  details     Json?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
 }

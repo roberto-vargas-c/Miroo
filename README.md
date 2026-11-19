@@ -50,8 +50,15 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Emoji reactions that float up on everyone's screen
 - Presentation mode: frames become slides in reading order; "present to everyone" makes others follow along
 
+**Accounts & security**
+- Email and password, with email confirmation and password reset (a reset signs you out everywhere else)
+- Continue with Google
+- Single sign-on per workspace with OpenID Connect (Okta, Microsoft Entra ID, Google Workspace, Auth0, OneLogin…), optionally required for everyone at the company's domains
+- Company domains verified by DNS TXT record; people who sign up with a verified company email can join the workspace automatically
+- Audit log for admins: invites, role changes, teams, boards, sharing, folders, templates, domains and SSO, with filters and CSV export
+- Invite emails (through SMTP; printed to the server log when SMTP isn't configured)
+
 **Workspaces & teams**
-- Accounts (email + password)
 - Multiple workspaces per user, with a workspace switcher
 - Workspace roles: Owner, Admin, Member, Viewer
 - Invite links with a role, pending invite list, revoke
@@ -106,10 +113,9 @@ Browser ──HTTP──▶ Next.js (pages, server actions, /api/*) ──▶ Po
 
 ## Not yet built
 
-- Google / SSO sign-in and password reset
-- Sending invite emails (invites are links you copy for now)
 - Touch pinch-zoom on phones and tablets
 - Board thumbnails
+- SAML single sign-on and SCIM user provisioning (SSO uses OpenID Connect, which every major identity provider supports)
 - Templates keep image links to the board they came from; deleting that board removes those images
 - Automated tests and CI
 - Image storage in object storage (S3/R2) instead of Postgres

@@ -7,7 +7,7 @@ function secret() {
   return new TextEncoder().encode(s);
 }
 
-export type SessionClaims = { sub: string; name: string; email: string };
+export type SessionClaims = { sub: string; name: string; email: string; sv: number };
 export type RealtimeClaims = {
   sub: string; // user id or "guest:<random>"
   name: string;
@@ -28,7 +28,7 @@ export async function verifySession(token: string): Promise<SessionClaims | null
   try {
     const { payload } = await jwtVerify(token, secret());
     if (payload.typ !== "session") return null;
-    return { sub: String(payload.sub), name: String(payload.name), email: String(payload.email) };
+    return { sub: String(payload.sub), name: String(payload.name), email: String(payload.email), sv: Number(payload.sv ?? 0) };
   } catch {
     return null;
   }
