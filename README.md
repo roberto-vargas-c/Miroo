@@ -82,8 +82,8 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 | --- | --- |
 | Web app | Next.js 16 (App Router, server actions), React 19, TypeScript, Tailwind CSS 4 |
 | Canvas | Konva / react-konva |
-| Real-time | Yjs + y-protocols; small Node WebSocket server in `server/realtime.ts` |
-| Database | Postgres via Prisma |
+| Real-time | Yjs + y-protocols; room logic in `server/room.ts`, served by a Durable Object on Cloudflare or a small Node WebSocket server (`server/realtime.ts`) |
+| Database | Postgres via Prisma (`pg` driver; Hyperdrive on Cloudflare) |
 | Auth | Own session cookie (JWT signed with `AUTH_SECRET`, bcrypt passwords) |
 
 ## Run it locally
@@ -113,7 +113,35 @@ Browser ──HTTP──▶ Next.js (pages, server actions, /api/*) ──▶ Po
 - Workspaces, teams, invites, comments and image assets are ordinary Postgres tables (`prisma/schema.prisma`).
 - Permission rules are in `src/lib/permissions.ts`.
 
-## Deploying
+## Deploying to Cloudflare
+
+Schema runs on Cloudflare Workers: the Next.js app through [OpenNext](https://opennext.js.org/cloudflare), live collaboration in a Durable Object per board (`cloudflare/boardRoom.ts`), and Postgres through Hyperdrive. The GitHub Actions workflow `.github/workflows/deploy-cloudflare.yml` deploys every push to `main` and can also be run by hand from the Actions tab.
+
+**One-time setup**
+
+1. **Cloudflare account on the Workers Paid plan** ($5/month). The app is about 3.5 MB compressed, over the free plan's 3 MB limit.
+2. **A Postgres database.** Cloudflare doesn't host Postgres; [Neon](https://neon.tech)'s free tier works. Copy its connection string.
+3. **Hyperdrive** (Cloudflare dashboard → Storage & databases → Hyperdrive → Create), using that connection string. Copy the Hyperdrive ID.
+4. **API token** (My Profile → API Tokens → Create Token → "Edit Cloudflare Workers" template), and your **Account ID** (on the Workers & Pages overview).
+5. **In GitHub** (repository Settings → Secrets and variables → Actions), add:
+
+   | Name | Kind | Value |
+   |---|---|---|
+   | `CLOUDFLARE_API_TOKEN` | secret | the token from step 4 |
+   | `CLOUDFLARE_ACCOUNT_ID` | secret | your account ID |
+   | `DATABASE_URL` | secret | the Neon connection string (used to update the schema on each deploy) |
+   | `HYPERDRIVE_ID` | secret | the ID from step 3 |
+   | `AUTH_SECRET` | secret | a long random string (`openssl rand -base64 32`) |
+   | `APP_URL` | variable | the public URL, e.g. `https://schema.<your-subdomain>.workers.dev` or your own domain |
+   | `ANTHROPIC_API_KEY` | secret, optional | turns on AI assist |
+   | `RESEND_API_KEY`, `EMAIL_FROM` | secrets, optional | sends email through [Resend](https://resend.com); without them, emails only go to the Worker's logs |
+   | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | secrets, optional | "Continue with Google" (redirect URI `<APP_URL>/api/auth/oidc/callback`) |
+
+6. Run **Actions → Deploy to Cloudflare → Run workflow**. A custom domain can be added afterwards under the Worker's Settings → Domains & Routes; update `APP_URL` to match.
+
+**Try the Worker locally**: put `AUTH_SECRET` and `APP_URL="http://localhost:8787"` in `.dev.vars`, then `npm run cf:preview`. It uses the local Postgres from `wrangler.jsonc`.
+
+## Deploying on Node hosts
 
 - **Web app**: any Node host (Vercel, Railway, Fly.io, Render). Set `DATABASE_URL`, `AUTH_SECRET`, `APP_URL`, `NEXT_PUBLIC_REALTIME_URL`.
 - **Realtime server**: a long-running Node process (`npm run start:realtime`) on Railway, Fly.io or Render, with the same `DATABASE_URL` and `AUTH_SECRET`. Use `wss://` in `NEXT_PUBLIC_REALTIME_URL`.

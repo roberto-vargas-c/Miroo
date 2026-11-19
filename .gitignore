@@ -6,3 +6,6 @@ node_modules
 next-env.d.ts
 uploads/
 public/pdf.worker.min.mjs
+.open-next
+.wrangler
+.dev.vars

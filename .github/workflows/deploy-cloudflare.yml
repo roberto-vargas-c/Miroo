@@ -1,0 +1,78 @@
+# Deploys Schema to Cloudflare Workers on every push to main, or by hand from the Actions tab.
+# Setup (secrets and variables to add in GitHub) is in README.md, "Deploying to Cloudflare".
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      NEXT_PUBLIC_REALTIME_URL: /realtime
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check required secrets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          HYPERDRIVE_ID: ${{ secrets.HYPERDRIVE_ID }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          missing=""
+          for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID DATABASE_URL HYPERDRIVE_ID AUTH_SECRET APP_URL; do
+            [ -n "${!n}" ] || missing="$missing $n"
+          done
+          if [ -n "$missing" ]; then echo "::error::Missing GitHub secrets or variables:$missing (see README, Deploying to Cloudflare)"; exit 1; fi
+
+      - run: npm ci
+
+      - name: Update the database schema
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        # Refuses changes that would delete data; those need a manual decision.
+        run: npx prisma db push --skip-generate
+
+      - name: Point the Worker at this account's Hyperdrive
+        env:
+          HYPERDRIVE_ID: ${{ secrets.HYPERDRIVE_ID }}
+        run: sed -i "s/00000000000000000000000000000000/${HYPERDRIVE_ID}/" wrangler.jsonc
+
+      - name: Build
+        run: npm run cf:build
+
+      - name: Deploy
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        # Secrets go up with the new version, so it never runs without them. Only the ones that are
+        # set are sent, through a JSON file rather than the command line.
+        run: |
+          node -e '
+            const keys = ["AUTH_SECRET","ANTHROPIC_API_KEY","RESEND_API_KEY","EMAIL_FROM","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET"];
+            const out = Object.fromEntries(keys.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+            require("fs").writeFileSync(process.env.RUNNER_TEMP + "/worker-secrets.json", JSON.stringify(out));
+          '
+          npx wrangler deploy --secrets-file "$RUNNER_TEMP/worker-secrets.json" --var APP_URL:"$APP_URL"
+          rm "$RUNNER_TEMP/worker-secrets.json"

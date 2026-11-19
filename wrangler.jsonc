@@ -1,0 +1,29 @@
+{
+  // Cloudflare Workers deployment. See "Deploying to Cloudflare" in README.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "schema",
+  // Our entry wraps the OpenNext worker and adds the realtime Durable Object.
+  "main": "cloudflare/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "schema" }],
+  "durable_objects": {
+    "bindings": [{ "name": "BOARD_ROOM", "class_name": "BoardRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardRoom"] }],
+  // Postgres through Hyperdrive. Create it with:
+  //   npx wrangler hyperdrive create schema-db --connection-string="postgres://..."
+  // and put the id it prints here (the deploy workflow does this from the HYPERDRIVE_ID secret).
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "00000000000000000000000000000000",
+      "localConnectionString": "postgresql://miroo:miroo@localhost:5432/miroo"
+    }
+  ],
+  "vars": {
+    "NEXT_PUBLIC_REALTIME_URL": "/realtime"
+  },
+  "observability": { "enabled": true }
+}

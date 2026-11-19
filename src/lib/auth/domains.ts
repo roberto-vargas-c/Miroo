@@ -1,5 +1,5 @@
 import "server-only";
-import { resolveTxt } from "node:dns/promises";
+import { resolveTxt } from "../dns";
 import { db } from "../db";
 import { audit } from "../audit";
 
@@ -22,7 +22,7 @@ export async function domainHasToken(domain: string, token: string) {
   if (process.env.DOMAIN_VERIFICATION === "off" && process.env.NODE_ENV !== "production") return true;
   try {
     const records = await resolveTxt(domain);
-    return records.some((r) => r.join("").trim() === `${TXT_PREFIX}${token}`);
+    return records.some((r) => r.trim() === `${TXT_PREFIX}${token}`);
   } catch {
     return false;
   }

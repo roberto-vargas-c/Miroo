@@ -11,12 +11,17 @@
     "start:realtime": "tsx server/realtime.ts",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit",
-    "postinstall": "node scripts/copy-pdf-worker.mjs"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p cloudflare",
+    "lint": "tsc --noEmit && tsc --noEmit -p cloudflare",
+    "postinstall": "node scripts/copy-pdf-worker.mjs",
+    "cf:build": "prisma generate && opennextjs-cloudflare build",
+    "cf:preview": "npm run cf:build && wrangler dev",
+    "cf:deploy": "npm run cf:build && wrangler deploy"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",
+    "@opennextjs/cloudflare": "^1.20.17",
+    "@prisma/adapter-pg": "^6.19.3",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.17",
@@ -28,6 +33,7 @@
     "next": "^16.4.6",
     "nodemailer": "^7.0.10",
     "pdfjs-dist": "^6.5.438",
+    "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-konva": "^19.3.2",
@@ -39,9 +45,11 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261119.1",
     "@tailwindcss/postcss": "^4.3.5",
     "@types/node": "^22.20.5",
     "@types/nodemailer": "^8.0.2",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/ws": "^8.18.2",
@@ -50,6 +58,7 @@
     "prisma": "^6.19.3",
     "tailwindcss": "^4.3.5",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.165.0"
   }
 }
