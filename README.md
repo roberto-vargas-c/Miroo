@@ -21,6 +21,14 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Comments pinned to the canvas, with replies and resolve
 - Board templates: Kanban, Retrospective, Brainstorm, Flowchart
 
+**Architecture tools** (bottom toolbar)
+- Import plans: PDFs (every page becomes a locked sheet, rendered in the browser with pdf.js) or images
+- Set the scale per plan, either by drawing over a known dimension or, for PDFs, by entering the drawing scale (1:100…); or set one scale for the whole board
+- Measure lengths (dimension lines) and areas with perimeter, in m, cm, mm or ft-in; Shift snaps angles to 15°
+- Walls drawn at 20 cm thickness at plan scale
+- Redlining: revision clouds, highlighter, red line and text colors
+- Plan symbol library sized to real dimensions: doors, windows, stairs, columns, bathroom and kitchen fixtures, furniture, trees, cars, north arrow, section and level markers
+
 **Facilitation & presenting**
 - Shared timer with pause, +1 minute and an alarm
 - Voting sessions: set votes per person, optionally hide results until the end, ranked results
@@ -55,7 +63,7 @@ Requires Node 20+ and Postgres 16 (or Docker).
 ```bash
 docker compose up -d          # or point DATABASE_URL at your own Postgres
 cp .env.example .env          # then set AUTH_SECRET: openssl rand -hex 32
-npm install
+npm install                   # also copies the pdf.js worker into public/
 npx prisma db push            # create the tables
 npm run dev                   # web on :3000, realtime server on :1234
 ```

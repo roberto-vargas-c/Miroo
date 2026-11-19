@@ -9,7 +9,13 @@ export type ElementType =
   | "connector"
   | "pen"
   | "image"
-  | "frame";
+  | "frame"
+  // Architecture tools
+  | "dimension" // measured length between two points
+  | "area" // measured polygon
+  | "wall" // rotated rect drawn from A to B
+  | "cloud" // revision cloud (redline)
+  | "symbol"; // plan symbol from the library (door, window, furniture…)
 
 export interface BaseElement {
   id: string;
@@ -42,14 +48,36 @@ export interface PenElement extends BaseElement {
   type: "pen";
   points: number[]; // relative to x,y
   strokeWidth: number;
+  opacity?: number; // < 1 for the highlighter
 }
+
+/** Real-world scale of a plan: `metersPerPx` meters per world pixel when the element is `refWidth` wide. */
+export type PlanScale = { metersPerPx: number; refWidth: number };
 
 export interface ImageElement extends BaseElement {
   type: "image";
   src: string;
+  /** Set for imported plans (PDF pages or images). */
+  plan?: { name: string; page?: number; /** width in PDF points (1/72 in) when imported from PDF */ paperWidthPt?: number };
+  scale?: PlanScale;
 }
 
-export type BoardElement = BaseElement | ConnectorElement | PenElement | ImageElement;
+/** Dimension (2 points) or area (polygon) measurement; points are relative to x,y like pen strokes. */
+export interface MeasureElement extends BaseElement {
+  type: "dimension" | "area";
+  points: number[];
+}
+
+export interface SymbolElement extends BaseElement {
+  type: "symbol";
+  symbol: string;
+}
+
+export type BoardElement = BaseElement | ConnectorElement | PenElement | ImageElement | MeasureElement | SymbolElement;
+
+export function hasPoints(el: BoardElement): el is PenElement | MeasureElement {
+  return el.type === "pen" || el.type === "dimension" || el.type === "area";
+}
 
 export const STICKY_COLORS = ["#fde68a", "#fbcfe8", "#bfdbfe", "#bbf7d0", "#ddd6fe", "#fed7aa", "#e5e7eb"];
 export const SHAPE_COLORS = ["#ffffff", "#0f766e", "#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#111827"];

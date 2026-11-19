@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X } from "lucide-react";
 import { makeElement, type BoardElement, type ImageElement } from "@/lib/board/types";
+import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
+import { unionRect, bounds as elBounds } from "./geometry";
+import { ArchToolbar } from "./ArchToolbar";
+import { ScaleDialog } from "./ScaleDialog";
 import { renameBoard } from "@/app/actions/workspace";
 import { LogoMark } from "@/components/Logo";
 import { Avatar } from "@/components/Avatar";
@@ -268,6 +272,88 @@ export function BoardApp(p: BoardAppProps) {
 
   const selected = useMemo(() => elements.filter((e) => selection.includes(e.id)), [elements, selection]);
 
+  // ── Architecture: scale, units, plan import ──
+  const unit: Unit = session.unit ?? "m";
+  const [placingSymbol, setPlacingSymbol] = useState<string | null>(null);
+  const [importing, setImporting] = useState<string | null>(null);
+  const [scaleDialog, setScaleDialog] = useState<{ lengthPx: number | null; plan: ImageElement | null } | null>(null);
+  const planInputRef = useRef<HTMLInputElement>(null);
+  const planAt = (pt: { x: number; y: number }) => {
+    for (let i = elements.length - 1; i >= 0; i--) {
+      const e = elements[i];
+      if (e.type === "image" && pt.x >= e.x && pt.x <= e.x + e.width && pt.y >= e.y && pt.y <= e.y + e.height) return e as ImageElement;
+    }
+    return null;
+  };
+  const selectedPlan = selected.length === 1 && selected[0].type === "image" ? (selected[0] as ImageElement) : null;
+  const scaleText = (() => {
+    const describe = (mpp: number) => `100 px = ${formatLength(mpp * 100, unit)}`;
+    if (selectedPlan) {
+      const mpp = metersPerPxOfPlan(selectedPlan);
+      if (!mpp) return "This plan has no scale yet";
+      const pw = selectedPlan.plan?.paperWidthPt;
+      return pw ? `Plan at 1:${Math.round((mpp * selectedPlan.width) / (PT_IN_METERS * pw))}` : `Plan: ${describe(mpp)}`;
+    }
+    const scaled = elements.filter((e) => e.type === "image" && (e as ImageElement).scale).length;
+    if (session.boardScale) return `Board: ${describe(session.boardScale.metersPerPx)}`;
+    return scaled ? `${scaled} scaled plan${scaled > 1 ? "s" : ""}` : "No scale set";
+  })();
+
+  const uploadBlob = async (blob: Blob, name: string) => {
+    const fd = new FormData();
+    fd.append("file", new File([blob], name, { type: blob.type }));
+    const res = await fetch(`/api/boards/${p.boardId}/assets${q}`, { method: "POST", body: fd });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "Upload failed");
+    return (await res.json()).url as string;
+  };
+  const importPlan = async (file: File) => {
+    const center = canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    const baseZ = elements.reduce((m, e) => Math.min(m, e.z), 0) - 1000;
+    const name = file.name.replace(/\.[^.]+$/, "");
+    try {
+      const created: ImageElement[] = [];
+      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        setImporting("Reading PDF…");
+        const { renderPdf } = await import("./pdfImport");
+        const pages = await renderPdf(file, (d, t) => setImporting(`Rendering ${d}/${t}…`));
+        let x = center.x - (pages[0]?.widthPt ?? 0) / 2;
+        for (const pg of pages) {
+          setImporting(`Uploading ${pg.page}/${pages.length}…`);
+          const url = await uploadBlob(pg.blob, `${name}-p${pg.page}.png`);
+          const el = makeElement("image", x, center.y - pg.heightPt / 2, {
+            width: pg.widthPt, height: pg.heightPt, fill: "transparent", stroke: "transparent", locked: true, z: baseZ + pg.page,
+          }) as ImageElement;
+          el.src = url;
+          el.plan = { name, page: pg.page, paperWidthPt: pg.widthPt };
+          created.push(el);
+          x += pg.widthPt + 120;
+        }
+      } else if (file.type.startsWith("image/")) {
+        setImporting("Uploading…");
+        const url = await uploadBlob(file, file.name);
+        const img = new window.Image();
+        await new Promise((r, j) => { img.onload = r; img.onerror = j; img.src = url; });
+        const k = Math.min(1, 4000 / Math.max(img.width, img.height));
+        const el = makeElement("image", center.x - (img.width * k) / 2, center.y - (img.height * k) / 2, {
+          width: img.width * k, height: img.height * k, fill: "transparent", stroke: "transparent", locked: true, z: baseZ,
+        }) as ImageElement;
+        el.src = url;
+        el.plan = { name };
+        created.push(el);
+      } else {
+        throw new Error("Choose a PDF or an image (PNG, JPEG, WebP)");
+      }
+      api.add(created);
+      const b = unionRect(created.map(elBounds));
+      if (b && canvasRef.current) flyTo(canvasRef.current.cameraFor(b, 80));
+      setToast(created.length > 1 ? `Imported ${created.length} sheets. Set the scale to start measuring.` : "Plan imported. Set the scale to start measuring.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Import failed");
+    } finally {
+      setImporting(null);
+    }
+  };
+
   // ── Images ──
   const q = p.shareToken ? `?share=${encodeURIComponent(p.shareToken)}` : "";
   const addImageFile = useCallback(async (file: File, at?: { x: number; y: number }) => {
@@ -361,6 +447,10 @@ export function BoardApp(p: BoardAppProps) {
         camera={camera}
         setCamera={setCamera}
         penColor={penColor}
+        boardScale={session.boardScale}
+        unit={unit}
+        placingSymbol={placingSymbol}
+        onCalibrate={(l) => setScaleDialog({ lengthPx: Math.hypot(l.x2 - l.x1, l.y2 - l.y1), plan: planAt({ x: (l.x1 + l.x2) / 2, y: (l.y1 + l.y2) / 2 }) })}
         onComment={(pt) => { setCommentDraft(pt); setCommentsOpen(true); setActiveComment(null); }}
         overlay={<>
           {!presenting && <CommentPins comments={comments.comments} camera={camera} activeId={activeComment} draft={commentDraft} showResolved={showResolved}
@@ -396,7 +486,7 @@ export function BoardApp(p: BoardAppProps) {
       )}
 
       {privateOn && !presenting && (
-        <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-violet-600 px-3 py-1.5 text-xs font-medium text-white shadow">
+        <div className="absolute bottom-16 left-1/2 z-10 -translate-x-1/2 rounded-full bg-violet-600 px-3 py-1.5 text-xs font-medium text-white shadow">
           Private mode is on: new notes stay hidden from others until it&apos;s turned off
         </div>
       )}
@@ -468,7 +558,15 @@ export function BoardApp(p: BoardAppProps) {
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
         onChange={(e) => { const f = e.target.files?.[0]; if (f) addImageFile(f); e.target.value = ""; }} />
 
-      {tool === "pen" && (
+      {canEdit && (
+        <ArchToolbar tool={tool} setTool={setTool} onImportPlan={() => planInputRef.current?.click()} importing={importing}
+          placingSymbol={placingSymbol} setPlacingSymbol={setPlacingSymbol}
+          unit={unit} setUnit={(u) => api.setSession("unit", u)} scaleText={scaleText} />
+      )}
+      <input ref={planInputRef} type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp" hidden
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) importPlan(f); e.target.value = ""; }} />
+
+      {(tool === "pen" || tool === "highlighter") && (
         <div className="absolute left-16 top-1/2 z-10 ml-2 flex -translate-y-1/2 flex-col gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
           {["#111827", "#0f8573", "#2563eb", "#db2777", "#ea580c", "#ca8a04"].map((c) => (
             <button key={c} onClick={() => setPenColor(c)} className={`h-6 w-6 rounded-full ${penColor === c ? "ring-2 ring-brand-500 ring-offset-1" : ""}`} style={{ background: c }} />
@@ -477,6 +575,7 @@ export function BoardApp(p: BoardAppProps) {
       )}
 
       {canEdit && <PropertiesBar selected={selected} all={elements} api={api} onDuplicate={duplicateSelected}
+        onSetScale={selectedPlan ? () => setScaleDialog({ lengthPx: null, plan: selectedPlan }) : undefined}
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}
@@ -511,6 +610,12 @@ export function BoardApp(p: BoardAppProps) {
           onClear={() => { if (vote) rawApi.clearVotes(vote.id); api.setSession("vote", null); }}
           onFocus={(el) => canvasRef.current && flyTo(canvasRef.current.cameraFor({ x: el.x, y: el.y, width: el.width, height: el.height }, 200))}
           onClose={() => setVoteOpen(false)} />
+      )}
+
+      {scaleDialog && (
+        <ScaleDialog lengthPx={scaleDialog.lengthPx} plan={scaleDialog.plan} unit={unit} onClose={() => setScaleDialog(null)}
+          onSavePlan={(pl, mpp) => { api.update(pl.id, { scale: { metersPerPx: mpp, refWidth: pl.width } } as Partial<BoardElement>); setToast("Scale saved for this plan"); }}
+          onSaveBoard={(mpp) => { api.setSession("boardScale", { metersPerPx: mpp }); setToast("Scale saved for the board"); }} />
       )}
 
       {shareOpen && p.sharing && (

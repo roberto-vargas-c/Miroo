@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Group, Rect, Text, Ellipse, Line, Image as KImage } from "react-konva";
-import type { BoardElement, ImageElement, PenElement } from "@/lib/board/types";
+import { Group, Rect, Text, Ellipse, Line, Image as KImage, Path, Label as KLabel, Tag } from "react-konva";
+import type { BoardElement, ImageElement, MeasureElement, PenElement, SymbolElement } from "@/lib/board/types";
+import { cloudPath, polygonCentroid, SYMBOL_BY_ID } from "@/lib/board/arch";
 
 function useImage(src: string) {
   const [img, setImg] = useState<HTMLImageElement | null>(null);
@@ -57,6 +58,10 @@ type Props = {
   el: BoardElement;
   /** Private mode: someone else's note, shown face-down. */
   hidden?: boolean;
+  /** Measurement text for dimension / area elements. */
+  measure?: string;
+  /** Current zoom, so measurement labels stay readable. */
+  zoom?: number;
   draggable: boolean;
   editing: boolean;
   selected: boolean;
@@ -67,7 +72,7 @@ type Props = {
   onDblClick: (id: string) => void;
 };
 
-export function ElementNode({ el, hidden, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
+export function ElementNode({ el, hidden, measure, zoom = 1, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
   const common = {
     id: el.id,
     name: "element",
@@ -144,7 +149,7 @@ export function ElementNode({ el, hidden, draggable, editing, onDragStart, onDra
       return (
         <Group {...common}>
           <Rect width={el.width} height={el.height} fill="rgba(0,0,0,0)" />
-          <Line points={p.points} stroke={p.stroke} strokeWidth={p.strokeWidth} lineCap="round" lineJoin="round" tension={0.4} />
+          <Line points={p.points} stroke={p.stroke} strokeWidth={p.strokeWidth} lineCap="round" lineJoin="round" tension={0.4} opacity={p.opacity ?? 1} />
         </Group>
       );
     }
@@ -154,6 +159,69 @@ export function ElementNode({ el, hidden, draggable, editing, onDragStart, onDra
           <ImageShape el={el as ImageElement} />
         </Group>
       );
+    case "dimension": {
+      const m = el as MeasureElement;
+      const [x1, y1, x2, y2] = m.points;
+      const ang = Math.atan2(y2 - y1, x2 - x1);
+      const tick = 7 / zoom;
+      const nx = -Math.sin(ang) * tick, ny = Math.cos(ang) * tick;
+      // Keep the label upright.
+      let deg = (ang * 180) / Math.PI;
+      if (deg > 90 || deg < -90) deg += 180;
+      const fs = 13 / zoom;
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} fill="rgba(0,0,0,0)" />
+          <Line points={m.points} stroke={el.stroke} strokeWidth={1.5 / zoom} hitStrokeWidth={14 / zoom} />
+          <Line points={[x1 - nx, y1 - ny, x1 + nx, y1 + ny]} stroke={el.stroke} strokeWidth={1.5 / zoom} />
+          <Line points={[x2 - nx, y2 - ny, x2 + nx, y2 + ny]} stroke={el.stroke} strokeWidth={1.5 / zoom} />
+          <KLabel x={(x1 + x2) / 2} y={(y1 + y2) / 2} rotation={deg} listening={false}>
+            <Tag fill="white" stroke={el.stroke} strokeWidth={1 / zoom} cornerRadius={3 / zoom} pointerDirection="none" />
+            <Text text={measure ?? ""} fontSize={fs} padding={3 / zoom} fill={el.stroke} fontStyle="600" offsetX={0} />
+          </KLabel>
+        </Group>
+      );
+    }
+    case "area": {
+      const m = el as MeasureElement;
+      const c = polygonCentroid(m.points);
+      const fs = 13 / zoom;
+      return (
+        <Group {...common}>
+          <Line points={m.points} closed fill={el.fill} stroke={el.stroke} strokeWidth={1.5 / zoom} dash={[6 / zoom, 4 / zoom]} />
+          <KLabel x={c.x} y={c.y} listening={false}>
+            <Tag fill="white" stroke={el.stroke} strokeWidth={1 / zoom} cornerRadius={3 / zoom} />
+            <Text text={measure ?? ""} fontSize={fs} padding={4 / zoom} fill={el.stroke} fontStyle="600" align="center" />
+          </KLabel>
+        </Group>
+      );
+    }
+    case "wall":
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} fill={el.fill} stroke={el.stroke} strokeWidth={1} />
+        </Group>
+      );
+    case "cloud":
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} fill="rgba(0,0,0,0)" />
+          <Path data={cloudPath(el.width, el.height)} stroke={el.stroke} strokeWidth={2.5} lineJoin="round" />
+          <Label el={{ ...el, fill: "#ffffff" }} editing={editing} />
+        </Group>
+      );
+    case "symbol": {
+      const def = SYMBOL_BY_ID.get((el as SymbolElement).symbol);
+      if (!def) return null;
+      const sx = el.width / def.vb[0], sy = el.height / def.vb[1];
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} fill="rgba(0,0,0,0)" />
+          <Path data={def.d} scaleX={sx} scaleY={sy} stroke={el.stroke} strokeWidth={1.5 / Math.min(sx, sy)} fill={def.fill ?? (el.fill === "#ffffff" ? undefined : el.fill)}
+            lineJoin="round" lineCap="round" />
+        </Group>
+      );
+    }
     default:
       return null;
   }

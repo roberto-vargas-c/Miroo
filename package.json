@@ -12,7 +12,8 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "postinstall": "node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -23,6 +24,7 @@
     "lucide-react": "^1.75.0",
     "nanoid": "^5.1.6",
     "next": "^16.4.6",
+    "pdfjs-dist": "^6.5.438",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-konva": "^19.3.2",
