@@ -58,6 +58,14 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Audit log for admins: invites, role changes, teams, boards, sharing, folders, templates, domains and SSO, with filters and CSV export
 - Invite emails (through SMTP; printed to the server log when SMTP isn't configured)
 
+**AI assist** (needs an Anthropic API key)
+- Group the selected sticky notes by theme: each theme gets its own frame
+- Summarize the selection into key points and next steps
+- Add idea notes on a topic, without repeating what's already on the board
+- Turn a description into a flowchart (start/end, steps, decisions with Yes/No, documents) or a mind map
+- Results land on empty space next to your work, and Undo removes them
+- Only the text of the items you use is sent to Anthropic. Requests use `claude-opus-5-5` (change with `AI_MODEL`) with server-side fallbacks on, so if a request is declined by a model's safety filters, the API retries it on a fallback model. Each person can make `AI_REQUESTS_PER_HOUR` requests an hour (default 60)
+
 **Workspaces & teams**
 - Multiple workspaces per user, with a workspace switcher
 - Workspace roles: Owner, Admin, Member, Viewer
@@ -110,6 +118,7 @@ Browser ──HTTP──▶ Next.js (pages, server actions, /api/*) ──▶ Po
 - **Web app**: any Node host (Vercel, Railway, Fly.io, Render). Set `DATABASE_URL`, `AUTH_SECRET`, `APP_URL`, `NEXT_PUBLIC_REALTIME_URL`.
 - **Realtime server**: a long-running Node process (`npm run start:realtime`) on Railway, Fly.io or Render, with the same `DATABASE_URL` and `AUTH_SECRET`. Use `wss://` in `NEXT_PUBLIC_REALTIME_URL`.
 - **Database**: managed Postgres (Neon, Supabase, Railway, RDS).
+- **AI assist**: set `ANTHROPIC_API_KEY` on the web app. Without it, the AI panel says it isn't set up and everything else works.
 
 ## Not yet built
 

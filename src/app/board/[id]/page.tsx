@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { boardAndAccess } from "@/lib/boardAccess";
 import { BoardApp } from "@/components/board/BoardApp";
+import { aiEnabled } from "@/lib/ai";
 
 export default async function BoardPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ share?: string }> }) {
   const { id } = await params;
@@ -32,6 +33,7 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
       teams={teams}
       members={members}
       realtimeUrl={process.env.NEXT_PUBLIC_REALTIME_URL ?? "ws://localhost:1234"}
+      ai={aiEnabled()}
     />
   );
 }
