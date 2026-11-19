@@ -21,9 +21,12 @@
       "localConnectionString": "postgresql://miroo:miroo@localhost:5432/miroo"
     }
   ],
+  // Cloudflare Email Sending (onboarded for schema.robertovargas.dev). Change EMAIL_FROM with the domain.
+  "send_email": [{ "name": "EMAIL" }],
   "vars": {
     // Public address of the app, used in emailed links. The APP_URL GitHub variable overrides it.
     "APP_URL": "https://schema.robert-en-var.workers.dev",
+    "EMAIL_FROM": "Schema <no-reply@schema.robertovargas.dev>",
     "NEXT_PUBLIC_REALTIME_URL": "/realtime"
   },
   "observability": { "enabled": true }
