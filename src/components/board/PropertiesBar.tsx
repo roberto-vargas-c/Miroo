@@ -45,7 +45,7 @@ export function PropertiesBar({
           className={`h-6 w-6 rounded-full border ${isCustom || wheelFor === key ? "ring-2 ring-brand-500 ring-offset-1" : "border-slate-300"}`}
           style={{ background: isCustom ? v : "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }} />
         {wheelFor === key && (
-          <div className="card absolute left-1/2 top-9 z-20 -translate-x-1/2 p-3">
+          <div className="card fixed left-1/2 top-32 z-30 -translate-x-1/2 p-3 sm:absolute sm:top-9 sm:z-20">
             <ColorWheel value={v.startsWith("#") ? v : "#111827"} onChange={(c) => setAll({ [key]: c })} />
           </div>
         )}
@@ -76,7 +76,7 @@ export function PropertiesBar({
   };
 
   return (
-    <div className="absolute left-1/2 top-16 z-10 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-lg">
+    <div className="absolute left-3 right-3 top-[4.25rem] z-10 flex max-h-[40vh] flex-wrap items-center justify-center gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white px-2 py-2 shadow-lg sm:left-1/2 sm:right-auto sm:top-16 sm:max-h-none sm:-translate-x-1/2 sm:overflow-visible sm:px-3">
       {movable.length >= 2 && (
         <>
           <div className="flex items-center gap-0.5" title="Align">

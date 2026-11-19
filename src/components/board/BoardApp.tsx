@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse } from "lucide-react";
+import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse, MoreHorizontal } from "lucide-react";
 import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle, type DocElement, docFragment } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
@@ -550,6 +550,16 @@ export function BoardApp(p: BoardAppProps) {
   }, [api, p.boardId, q, setSelection]);
   // ── Stickers, emojis and GIFs ──
   const [stickersOpen, setStickersOpen] = useState(false);
+  const [archOpen, setArchOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const isPhone = useIsPhone();
+  // Tapping anywhere outside the header closes the phone "More" menu.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest("header, .card")) setMoreOpen(false); };
+    document.addEventListener("pointerdown", close, true);
+    return () => document.removeEventListener("pointerdown", close, true);
+  }, [moreOpen]);
   const gifInputRef = useRef<HTMLInputElement>(null);
   const boardGifs = useMemo(() => Array.from(new Set(elements.filter((e) => e.type === "image" && (e as ImageElement).animated).map((e) => (e as ImageElement).src))), [elements]);
   /** Element to add for a sticker, emoji or GIF, centered on (0, 0). */
@@ -837,13 +847,13 @@ export function BoardApp(p: BoardAppProps) {
 
       {!presenting && <>
       {/* Top bar */}
-      <header className="absolute left-3 right-3 top-3 z-30 flex items-center gap-2">
-        <div className="flex min-w-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
+      <header className="absolute left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1 rounded-xl sm:flex-none border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
           <Link href={p.workspaceId ? `/w/${p.workspaceId}` : "/w"} className="btn-ghost p-1.5" title="Back to boards">
             <ChevronLeft size={18} /><LogoMark size={22} />
           </Link>
           <input
-            className="min-w-0 max-w-[40vw] rounded-md bg-transparent px-2 py-1 text-sm font-medium outline-none hover:bg-slate-50 focus:bg-slate-50"
+            className="w-0 min-w-0 flex-1 rounded-md bg-transparent px-1 py-1 text-sm font-medium sm:w-auto sm:max-w-[40vw] sm:flex-none sm:px-2 outline-none hover:bg-slate-50 focus:bg-slate-50"
             value={title}
             disabled={!canEdit || !p.user}
             onChange={(e) => setTitle(e.target.value)}
@@ -854,33 +864,38 @@ export function BoardApp(p: BoardAppProps) {
             title={status === "connected" ? "Live" : "Reconnecting…"} />
           {!canEdit && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">View only</span>}
         </div>
-        <div className="ml-auto flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
-          <TimerWidget timer={session.timer} canEdit={canEdit} me={me?.name ?? ""} onChange={(t) => api.setSession("timer", t)} />
+        <div className="relative ml-auto flex shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-1.5 py-1.5 shadow-lg sm:gap-2 sm:px-2">
+          {!isPhone && <TimerWidget timer={session.timer} canEdit={canEdit} me={me?.name ?? ""} onChange={(t) => api.setSession("timer", t)} />}
           <div className="flex -space-x-2">
             {me && <Avatar name={`${me.name} (you)`} color={me.color} src={me.avatar} size={28} />}
-            {dedupePeers(peers).slice(0, 5).map((x) => (
+            {dedupePeers(peers).slice(0, isPhone ? 2 : 5).map((x) => (
               <button key={x.clientId} title={following === x.clientId ? `Stop following ${x.name}` : `Follow ${x.name}`}
                 className={`rounded-full ${following === x.clientId ? "ring-2 ring-offset-1" : ""}`} style={{ ["--tw-ring-color" as string]: x.color }}
                 onClick={() => (following === x.clientId ? stopFollowing() : setFollowing(x.clientId))}>
                 <Avatar name={x.name} color={x.color} src={x.avatar} size={28} />
               </button>
             ))}
-            {peers.length > 5 && <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs ring-2 ring-white">+{peers.length - 5}</span>}
+            {dedupePeers(peers).length > (isPhone ? 2 : 5) && <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs ring-2 ring-white">+{dedupePeers(peers).length - (isPhone ? 2 : 5)}</span>}
           </div>
+          <button className={`btn-ghost p-1.5 sm:hidden ${moreOpen ? "bg-slate-100" : ""}`} title="More" onClick={() => setMoreOpen((o) => !o)}><MoreHorizontal size={18} /></button>
+          {/* On phones these live in the "More" menu; on wider screens they sit in the bar. */}
+          <div className={`${moreOpen ? "card absolute right-0 top-12 flex w-[min(19rem,calc(100vw-24px))] flex-wrap items-center gap-1 p-1.5" : "hidden"} sm:static sm:flex sm:w-auto sm:flex-nowrap sm:gap-2 sm:rounded-none sm:border-0 sm:p-0 sm:shadow-none`}
+            onClick={(e) => { if (isPhone && (e.target as HTMLElement).closest("button[title]") && !(e.target as HTMLElement).closest("[data-keep-open]")) setTimeout(() => setMoreOpen(false), 0); }}>
+          {isPhone && <div data-keep-open className="contents"><TimerWidget timer={session.timer} canEdit={canEdit} me={me?.name ?? ""} onChange={(t) => api.setSession("timer", t)} /></div>}
           {canEdit && peers.length > 0 && (
             <button className="btn-ghost p-1.5" title="Bring everyone to my view" onClick={summonEveryone}><Users size={18} /></button>
           )}
-          <div className="h-6 w-px bg-slate-200" />
-          <ReactionPicker onReact={react} />
+          <div className="hidden h-6 w-px bg-slate-200 sm:block" />
+          <div data-keep-open className="contents"><ReactionPicker onReact={react} /></div>
           <PrivateModeButton mode={session.privateMode} canEdit={canEdit} me={me?.id ?? ""} onChange={setPrivateMode} />
           <button className={`btn-ghost p-1.5 ${voteOpen || vote?.open ? "bg-slate-100" : ""} ${vote?.open ? "text-brand-700" : ""}`} title="Voting"
             onClick={() => { setVoteOpen((o) => !o); setCommentsOpen(false); setHistoryOpen(false); setAiOpen(false); }}>
             <Vote size={18} />
           </button>
-          <div className="relative">
+          <div className="relative" data-keep-open>
             <button className="btn-ghost p-1.5" title="Present frames as slides" onClick={() => setPresentMenu((o) => !o)}><Presentation size={18} /></button>
             {presentMenu && (
-              <div className="card absolute right-0 top-10 z-30 w-56 p-1" onMouseLeave={() => setPresentMenu(false)}>
+              <div className="card fixed left-3 right-3 top-40 z-40 sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:z-30 sm:w-56 p-1" onMouseLeave={() => setPresentMenu(false)}>
                 <button className="btn-ghost w-full justify-start" onClick={() => { setPresentMenu(false); startPresenting(false); }}>Present on my screen</button>
                 {canEdit && <button className="btn-ghost w-full justify-start" onClick={() => { setPresentMenu(false); startPresenting(true); }}>Present to everyone</button>}
                 <p className="px-3 pb-1 text-xs text-slate-500">{frames.length} frame{frames.length === 1 ? "" : "s"}, shown in reading order.</p>
@@ -902,18 +917,20 @@ export function BoardApp(p: BoardAppProps) {
               <History size={18} />
             </button>
           )}
-          <BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onSaveTemplate={() => setDialog("template")}
+          <div data-keep-open className="contents"><BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onSaveTemplate={() => setDialog("template")}
             canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0}
-            showAuthors={showAuthors} onToggleAuthors={() => setShowAuthors((v) => { try { localStorage.setItem("schema.showAuthors", v ? "0" : "1"); } catch { /* ignore */ } return !v; })} />
-          {p.sharing && <button className="btn-primary py-1.5" onClick={() => setShareOpen(true)}><Share2 size={16} /> Share</button>}
+            showAuthors={showAuthors} onToggleAuthors={() => setShowAuthors((v) => { try { localStorage.setItem("schema.showAuthors", v ? "0" : "1"); } catch { /* ignore */ } return !v; })} /></div>
+          </div>
+          {p.sharing && <button className="btn-primary px-2.5 py-1.5 sm:px-4" title="Share" onClick={() => setShareOpen(true)}><Share2 size={16} /> <span className="hidden sm:inline">Share</span></button>}
         </div>
       </header>
 
       <Toolbar tool={tool} setTool={setTool} canEdit={canEdit} canComment={!!p.user} onImage={() => fileRef.current?.click()}
         onEmbed={() => setEmbedDialog("")} placingShape={placingShape} setPlacingShape={setPlacingShape}
-        stickersOpen={stickersOpen} onStickers={() => setStickersOpen((o) => !o)} onDoc={addDoc} />
+        stickersOpen={stickersOpen} onStickers={() => { setStickersOpen((o) => !o); setArchOpen(false); }} onDoc={addDoc}
+        archOpen={archOpen} onArch={canEdit ? () => { setArchOpen((o) => !o); setStickersOpen(false); } : undefined} />
       {canEdit && stickersOpen && (
-        <StickerPicker gifs={boardGifs} onPick={async (pk) => { setPlacing(await stickerTemplate(pk)); setTool("select"); }} onUploadGif={() => gifInputRef.current?.click()} onClose={() => setStickersOpen(false)} />
+        <StickerPicker gifs={boardGifs} onPick={async (pk) => { setPlacing(await stickerTemplate(pk)); setTool("select"); if (isPhone) setStickersOpen(false); }} onUploadGif={() => gifInputRef.current?.click()} onClose={() => setStickersOpen(false)} />
       )}
       <input ref={gifInputRef} type="file" multiple accept="image/gif" hidden
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = ""; }} />
@@ -923,7 +940,7 @@ export function BoardApp(p: BoardAppProps) {
       {canEdit && (
         <ArchToolbar tool={tool} setTool={setTool} onImportPlan={() => planInputRef.current?.click()} importing={importing}
           placingSymbol={placingSymbol} setPlacingSymbol={setPlacingSymbol}
-          unit={unit} setUnit={(u) => api.setSession("unit", u)} scaleText={scaleText} />
+          unit={unit} setUnit={(u) => api.setSession("unit", u)} scaleText={scaleText} mobileOpen={archOpen} />
       )}
       <input ref={planInputRef} type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp" hidden
         onChange={(e) => { const f = e.target.files?.[0]; if (f) importPlan(f); e.target.value = ""; }} />
@@ -933,7 +950,7 @@ export function BoardApp(p: BoardAppProps) {
           width={tool === "highlighter" ? highlightWidth : penWidth} setWidth={tool === "highlighter" ? setHighlightWidth : setPenWidth} />
       )}
       {tool === "connector" && (
-        <div className="absolute left-16 top-1/2 z-10 ml-2 flex -translate-y-1/2 flex-col gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+        <div className="absolute left-3 top-[4.25rem] z-10 flex gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg sm:left-16 sm:top-1/2 sm:ml-2 sm:-translate-y-1/2 sm:flex-col">
           {CONNECTOR_STYLES.map(([id, label, d]) => (
             <button key={id} title={label} onClick={() => {
               setConnectorStyle(id);
@@ -947,7 +964,7 @@ export function BoardApp(p: BoardAppProps) {
         </div>
       )}
 
-      {canEdit && <PropertiesBar selected={selected} all={elements} api={api} onDuplicate={duplicateSelected}
+      {canEdit && !(isPhone && tool !== "select") && <PropertiesBar selected={selected} all={elements} api={api} onDuplicate={duplicateSelected}
         onSetScale={selectedPlan ? () => setScaleDialog({ lengthPx: null, plan: selectedPlan }) : undefined}
         members={p.members}
         onCrop={(el) => setCropping(el.id)}
@@ -955,14 +972,14 @@ export function BoardApp(p: BoardAppProps) {
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}
-      <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+      <div className={`absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+3.75rem)] left-3 z-10 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-lg sm:bottom-3 ${archOpen || stickersOpen ? "max-sm:hidden" : ""}`}>
         <button className="btn-ghost p-1.5" title="Zoom out" onClick={() => canvasRef.current?.zoomBy(1 / 1.2)}><Minus size={16} /></button>
         <button className="w-14 text-center text-xs tabular-nums" title="Reset to 100%" onClick={() => canvasRef.current?.zoomTo(1)}>
           {Math.round(camera.scale * 100)}%
         </button>
         <button className="btn-ghost p-1.5" title="Zoom in" onClick={() => canvasRef.current?.zoomBy(1.2)}><Plus size={16} /></button>
         <button className="btn-ghost p-1.5" title="Fit to content" onClick={() => canvasRef.current?.fitContent()}><Maximize size={16} /></button>
-        <button className="btn-ghost p-1.5" onClick={cycleWheelMode}
+        <button className="btn-ghost hidden p-1.5 sm:inline-flex" onClick={cycleWheelMode}
           title={`Scroll wheel: ${WHEEL_LABEL[wheelMode]}. Click to change. Pinch always zooms.`}>
           {wheelMode === "pan" ? <Move size={16} /> : wheelMode === "zoom" ? <ZoomIn size={16} /> : <Mouse size={16} />}
         </button>
@@ -1156,4 +1173,17 @@ function copyXml(from: Y.XmlFragment | Y.XmlElement, to: Y.XmlFragment | Y.XmlEl
       copyXml(node, el);
     }
   });
+}
+
+/** True below Tailwind's `sm` breakpoint, where the board switches to its phone layout. */
+function useIsPhone() {
+  const [phone, setPhone] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639.98px)");
+    const upd = () => setPhone(mq.matches);
+    upd();
+    mq.addEventListener("change", upd);
+    return () => mq.removeEventListener("change", upd);
+  }, []);
+  return phone;
 }

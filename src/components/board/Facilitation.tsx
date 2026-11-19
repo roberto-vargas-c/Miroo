@@ -67,7 +67,7 @@ export function TimerWidget({
       <div className="relative">
         <button className="btn-ghost p-1.5" title="Timer" onClick={() => setSetupOpen((o) => !o)}><TimerIcon size={18} /></button>
         {setupOpen && (
-          <div className="card absolute right-0 top-10 z-30 w-56 space-y-2 p-3">
+          <div className="card fixed left-3 right-3 top-40 z-40 sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:z-30 sm:w-56 space-y-2 p-3">
             <div className="text-sm font-medium">Start a timer for everyone</div>
             <div className="flex flex-wrap gap-1">
               {[1, 3, 5, 10, 15].map((m) => (
@@ -241,7 +241,7 @@ export function ReactionPicker({ onReact }: { onReact: (emoji: string) => void }
     <div className="relative">
       <button className="btn-ghost p-1.5 text-base leading-none" title="React" onClick={() => setOpen((o) => !o)}>🙂</button>
       {open && (
-        <div className="card absolute right-0 top-10 z-30 flex gap-1 p-1.5" onMouseLeave={() => setOpen(false)}>
+        <div className="card fixed left-3 right-3 top-40 z-40 sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:z-30 flex justify-center gap-1 p-1.5 sm:justify-start" onMouseLeave={() => setOpen(false)}>
           {REACTIONS.map((e) => (
             <button key={e} className="rounded-md p-1 text-xl hover:bg-slate-100" onClick={() => onReact(e)}>{e}</button>
           ))}
