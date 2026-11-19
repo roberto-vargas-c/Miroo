@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { LayoutGrid, Users, UserCog, Settings, LogOut } from "lucide-react";
+import { LayoutGrid, Users, UserCog, Settings, LogOut, ScrollText } from "lucide-react";
+import { atLeast } from "@/lib/permissions";
+import { VerifyBanner } from "@/components/VerifyBanner";
 import { db } from "@/lib/db";
 import { loadWorkspace } from "@/lib/workspace";
 import { logout } from "@/app/actions/auth";
@@ -20,6 +22,7 @@ export default async function WorkspaceLayout({ children, params }: { children: 
     { href: `/w/${wid}/teams`, label: "Teams", icon: Users },
     { href: `/w/${wid}/members`, label: "Members", icon: UserCog },
     { href: `/w/${wid}/settings`, label: "Settings", icon: Settings },
+    ...(atLeast(role, "ADMIN") ? [{ href: `/w/${wid}/audit`, label: "Audit log", icon: ScrollText }] : []),
   ];
   return (
     <div className="flex min-h-full flex-col md:flex-row">
@@ -44,7 +47,10 @@ export default async function WorkspaceLayout({ children, params }: { children: 
           </form>
         </div>
       </aside>
-      <main className="min-w-0 flex-1 p-4 md:p-8">{children}</main>
+      <main className="min-w-0 flex-1 p-4 md:p-8">
+        {!user.emailVerifiedAt && <VerifyBanner email={user.email} />}
+        {children}
+      </main>
     </div>
   );
 }

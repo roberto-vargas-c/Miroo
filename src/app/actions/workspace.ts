@@ -10,6 +10,9 @@ import { requireUser } from "@/lib/session";
 import { atLeast, boardAccessForUser, ROLE_RANK, workspaceRole } from "@/lib/permissions";
 import { initialBoardState, stateFromElements } from "@/lib/board/doc";
 import type { BoardElement } from "@/lib/board/types";
+import { audit } from "@/lib/audit";
+import { sendMail, APP_URL } from "@/lib/mail";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { TEMPLATES, type TemplateId } from "@/lib/board/templates";
 
 export type ActionResult = { error?: string; ok?: boolean; link?: string } | undefined;
@@ -30,12 +33,16 @@ export async function createWorkspace(form: FormData) {
   const user = await requireUser();
   const n = name.parse(form.get("name"));
   const ws = await db.workspace.create({ data: { name: n, members: { create: { userId: user.id, role: "OWNER" } } } });
+  await audit(ws.id, user, "workspace.created", { type: "workspace", id: ws.id, name: n });
   redirect(`/w/${ws.id}`);
 }
 
 export async function renameWorkspace(workspaceId: string, form: FormData) {
-  await requireRole(workspaceId, "ADMIN");
-  await db.workspace.update({ where: { id: workspaceId }, data: { name: name.parse(form.get("name")) } });
+  const { user } = await requireRole(workspaceId, "ADMIN");
+  const before = await db.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { name: true } });
+  const n = name.parse(form.get("name"));
+  await db.workspace.update({ where: { id: workspaceId }, data: { name: n } });
+  await audit(workspaceId, user, "workspace.renamed", { type: "workspace", id: workspaceId, name: n }, { from: before.name });
   revalidatePath(`/w/${workspaceId}`, "layout");
 }
 
@@ -66,14 +73,22 @@ export async function inviteMember(workspaceId: string, _: ActionResult, form: F
     },
   });
   revalidatePath(`/w/${workspaceId}/members`);
-  const base = process.env.APP_URL ?? "http://localhost:3000";
-  return { ok: true, link: `${base}/invite/${inv.token}` };
+  const link = `${APP_URL()}/invite/${inv.token}`;
+  const ws = await db.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { name: true } });
+  await sendMail({
+    to: email.data,
+    subject: `${user.name} invited you to ${ws.name} on ${PRODUCT_NAME}`,
+    text: `${user.name} invited you to join the “${ws.name}” workspace on ${PRODUCT_NAME} as ${newRole.toLowerCase()}.\n\nAccept the invite:\n${link}\n\nThe link works for 14 days.`,
+  });
+  await audit(workspaceId, user, "member.invited", { type: "invite", id: inv.id, name: email.data }, { role: newRole });
+  return { ok: true, link };
 }
 
 export async function revokeInvite(inviteId: string) {
   const inv = await db.invite.findUniqueOrThrow({ where: { id: inviteId } });
-  await requireRole(inv.workspaceId, "ADMIN");
+  const { user } = await requireRole(inv.workspaceId, "ADMIN");
   await db.invite.delete({ where: { id: inviteId } });
+  await audit(inv.workspaceId, user, "invite.revoked", { type: "invite", id: inv.id, name: inv.email });
   revalidatePath(`/w/${inv.workspaceId}/members`);
 }
 
@@ -89,12 +104,13 @@ export async function acceptInvite(inviteToken: string) {
     }),
     db.invite.update({ where: { id: inv.id }, data: { acceptedAt: new Date() } }),
   ]);
+  await audit(inv.workspaceId, user, "member.joined", { type: "user", id: user.id, name: user.name }, { role: inv.role, invite: inv.email });
   redirect(`/w/${inv.workspaceId}`);
 }
 
 export async function changeMemberRole(memberId: string, form: FormData) {
   const m = await db.workspaceMember.findUniqueOrThrow({ where: { id: memberId } });
-  const { role } = await requireRole(m.workspaceId, "ADMIN");
+  const { role, user } = await requireRole(m.workspaceId, "ADMIN");
   const newRole = z.nativeEnum(WorkspaceRole).parse(form.get("role"));
   if ((m.role === "OWNER" || newRole === "OWNER") && role !== "OWNER") throw new Error("Only owners can change ownership");
   if (m.role === "OWNER" && newRole !== "OWNER") {
@@ -102,6 +118,8 @@ export async function changeMemberRole(memberId: string, form: FormData) {
     if (owners <= 1) throw new Error("A workspace needs at least one owner");
   }
   await db.workspaceMember.update({ where: { id: memberId }, data: { role: newRole } });
+  const target = await db.user.findUnique({ where: { id: m.userId }, select: { name: true } });
+  await audit(m.workspaceId, user, "member.role_changed", { type: "user", id: m.userId, name: target?.name }, { from: m.role, to: newRole });
   revalidatePath(`/w/${m.workspaceId}/members`);
 }
 
@@ -120,6 +138,8 @@ export async function removeMember(memberId: string) {
     db.teamMember.deleteMany({ where: { userId: m.userId, team: { workspaceId: m.workspaceId } } }),
     db.workspaceMember.delete({ where: { id: memberId } }),
   ]);
+  const target = self ? user : await db.user.findUnique({ where: { id: m.userId }, select: { name: true } });
+  await audit(m.workspaceId, user, "member.removed", { type: "user", id: m.userId, name: target?.name }, { role: m.role, left: self });
   if (self) redirect("/w");
   revalidatePath(`/w/${m.workspaceId}/members`);
 }
@@ -128,7 +148,7 @@ export async function removeMember(memberId: string) {
 
 export async function createTeam(workspaceId: string, form: FormData) {
   const { user } = await requireRole(workspaceId, "ADMIN");
-  await db.team.create({
+  const team = await db.team.create({
     data: {
       workspaceId,
       name: name.parse(form.get("name")),
@@ -136,6 +156,7 @@ export async function createTeam(workspaceId: string, form: FormData) {
       members: { create: { userId: user.id, role: "LEAD" } },
     },
   });
+  await audit(workspaceId, user, "team.created", { type: "team", id: team.id, name: team.name });
   revalidatePath(`/w/${workspaceId}/teams`);
 }
 
@@ -152,8 +173,9 @@ async function requireTeamManager(teamId: string) {
 
 export async function deleteTeam(teamId: string) {
   const team = await db.team.findUniqueOrThrow({ where: { id: teamId } });
-  await requireRole(team.workspaceId, "ADMIN");
+  const { user } = await requireRole(team.workspaceId, "ADMIN");
   await db.team.delete({ where: { id: teamId } });
+  await audit(team.workspaceId, user, "team.deleted", { type: "team", id: team.id, name: team.name });
   revalidatePath(`/w/${team.workspaceId}/teams`);
 }
 
@@ -167,6 +189,8 @@ export async function addTeamMember(teamId: string, form: FormData) {
     create: { teamId, userId, role },
     update: { role },
   });
+  const [actor, added] = await Promise.all([requireUser(), db.user.findUnique({ where: { id: userId }, select: { name: true } })]);
+  await audit(team.workspaceId, actor, "team.member_added", { type: "team", id: team.id, name: team.name }, { user: added?.name, role });
   revalidatePath(`/w/${team.workspaceId}/teams`);
 }
 
@@ -174,6 +198,8 @@ export async function removeTeamMember(teamMemberId: string) {
   const tm = await db.teamMember.findUniqueOrThrow({ where: { id: teamMemberId } });
   const team = await requireTeamManager(tm.teamId);
   await db.teamMember.delete({ where: { id: teamMemberId } });
+  const [actor, removed] = await Promise.all([requireUser(), db.user.findUnique({ where: { id: tm.userId }, select: { name: true } })]);
+  await audit(team.workspaceId, actor, "team.member_removed", { type: "team", id: team.id, name: team.name }, { user: removed?.name });
   revalidatePath(`/w/${team.workspaceId}/teams`);
 }
 
@@ -215,37 +241,43 @@ export async function createBoard(workspaceId: string, form: FormData) {
       content: Buffer.from(content),
     },
   });
+  await audit(workspaceId, user, "board.created", { type: "board", id: board.id, name: board.title }, { template, team: teamId, folder: folderId });
   redirect(`/board/${board.id}`);
 }
 
 // ── Folders ─────────────────────────────────────────────────────────────────
 
 export async function createFolder(workspaceId: string, form: FormData) {
-  await requireRole(workspaceId, "MEMBER");
+  const { user } = await requireRole(workspaceId, "MEMBER");
   const f = await db.folder.create({ data: { workspaceId, name: name.parse(form.get("name")) } });
+  await audit(workspaceId, user, "folder.created", { type: "folder", id: f.id, name: f.name });
   redirect(`/w/${workspaceId}?folder=${f.id}`);
 }
 
 export async function renameFolder(folderId: string, form: FormData) {
   const folder = await db.folder.findUniqueOrThrow({ where: { id: folderId } });
-  await requireRole(folder.workspaceId, "MEMBER");
-  await db.folder.update({ where: { id: folderId }, data: { name: name.parse(form.get("name")) } });
+  const { user } = await requireRole(folder.workspaceId, "MEMBER");
+  const n = name.parse(form.get("name"));
+  await db.folder.update({ where: { id: folderId }, data: { name: n } });
+  await audit(folder.workspaceId, user, "folder.renamed", { type: "folder", id: folderId, name: n }, { from: folder.name });
   revalidatePath(`/w/${folder.workspaceId}`);
 }
 
 /** Deleting a folder keeps its boards; they move back to "no folder". */
 export async function deleteFolder(folderId: string) {
   const folder = await db.folder.findUniqueOrThrow({ where: { id: folderId } });
-  await requireRole(folder.workspaceId, "ADMIN");
+  const { user } = await requireRole(folder.workspaceId, "ADMIN");
   await db.folder.delete({ where: { id: folderId } });
+  await audit(folder.workspaceId, user, "folder.deleted", { type: "folder", id: folderId, name: folder.name });
   redirect(`/w/${folder.workspaceId}`);
 }
 
 export async function moveBoardToFolder(boardId: string, form: FormData) {
-  const { board } = await requireBoardManager(boardId);
+  const { board, user } = await requireBoardManager(boardId);
   const folderId = String(form.get("folderId") ?? "") || null;
   if (folderId && !(await db.folder.findFirst({ where: { id: folderId, workspaceId: board.workspaceId } }))) throw new Error("Unknown folder");
   await db.board.update({ where: { id: boardId }, data: { folderId } });
+  await audit(board.workspaceId, user, "board.moved", { type: "board", id: board.id, name: board.title }, { folder: folderId });
   revalidatePath(`/w/${board.workspaceId}`);
 }
 
@@ -272,12 +304,13 @@ export async function saveBoardAsTemplate(boardId: string, input: { name: string
   }
   // Private notes and votes are personal; don't carry them into a template.
   elements = elements.filter((e) => !e.privateOwner);
-  await db.boardTemplate.create({
+  const tpl = await db.boardTemplate.create({
     data: {
       workspaceId: board.workspaceId, name: n.data, description: input.description.trim().slice(0, 200),
       elements: elements as unknown as object, createdById: user.id,
     },
   });
+  await audit(board.workspaceId, user, "template.created", { type: "template", id: tpl.id, name: tpl.name }, { fromBoard: board.title });
   revalidatePath(`/w/${board.workspaceId}`);
   return { ok: true };
 }
@@ -288,6 +321,7 @@ export async function deleteTemplate(templateId: string) {
   const role = await workspaceRole(user.id, t.workspaceId);
   if (t.createdById !== user.id && !atLeast(role, "ADMIN")) throw new Error("Only the author or an admin can delete a template");
   await db.boardTemplate.delete({ where: { id: templateId } });
+  await audit(t.workspaceId, user, "template.deleted", { type: "template", id: t.id, name: t.name });
   revalidatePath(`/w/${t.workspaceId}`);
 }
 
@@ -308,8 +342,9 @@ export async function renameBoard(boardId: string, title: string) {
 }
 
 export async function deleteBoard(boardId: string) {
-  const { board } = await requireBoardManager(boardId);
+  const { board, user } = await requireBoardManager(boardId);
   await db.board.delete({ where: { id: boardId } });
+  await audit(board.workspaceId, user, "board.deleted", { type: "board", id: board.id, name: board.title });
   revalidatePath(`/w/${board.workspaceId}`);
 }
 
@@ -327,7 +362,7 @@ export async function updateBoardSharing(
   boardId: string,
   data: { linkAccess?: LinkAccess; visibility?: BoardVisibility; teamId?: string | null; resetLink?: boolean },
 ) {
-  const { board } = await requireBoardManager(boardId);
+  const { board, user } = await requireBoardManager(boardId);
   if (data.teamId) {
     const team = await db.team.findFirst({ where: { id: data.teamId, workspaceId: board.workspaceId } });
     if (!team) throw new Error("Unknown team");
@@ -341,6 +376,12 @@ export async function updateBoardSharing(
       shareToken: data.resetLink ? token() : undefined,
     },
     select: { linkAccess: true, visibility: true, teamId: true, shareToken: true },
+  });
+  await audit(board.workspaceId, user, "board.sharing_changed", { type: "board", id: board.id, name: board.title }, {
+    ...(data.linkAccess ? { linkAccess: { from: board.linkAccess, to: updated.linkAccess } } : {}),
+    ...(data.visibility ? { visibility: { from: board.visibility, to: updated.visibility } } : {}),
+    ...(data.teamId !== undefined ? { team: updated.teamId } : {}),
+    ...(data.resetLink ? { linkReset: true } : {}),
   });
   return updated;
 }

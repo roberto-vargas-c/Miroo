@@ -6,8 +6,8 @@ import { signSession, verifySession } from "./token";
 
 export const SESSION_COOKIE = "mr_session";
 
-export async function createSession(user: { id: string; name: string; email: string }) {
-  const token = await signSession({ sub: user.id, name: user.name, email: user.email });
+export async function createSession(user: { id: string; name: string; email: string; sessionVersion: number }) {
+  const token = await signSession({ sub: user.id, name: user.name, email: user.email, sv: user.sessionVersion });
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -26,10 +26,13 @@ export async function currentUser() {
   if (!token) return null;
   const claims = await verifySession(token);
   if (!claims) return null;
-  return db.user.findUnique({
+  const user = await db.user.findUnique({
     where: { id: claims.sub },
-    select: { id: true, name: true, email: true, color: true },
+    select: { id: true, name: true, email: true, color: true, emailVerifiedAt: true, sessionVersion: true },
   });
+  // Sessions issued before a password reset (or "sign out everywhere") are no longer valid.
+  if (!user || user.sessionVersion !== claims.sv) return null;
+  return user;
 }
 
 export async function requireUser(next?: string) {
