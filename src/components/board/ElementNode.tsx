@@ -55,6 +55,8 @@ export function Label({ el, editing }: { el: BoardElement; editing: boolean }) {
 
 type Props = {
   el: BoardElement;
+  /** Private mode: someone else's note, shown face-down. */
+  hidden?: boolean;
   draggable: boolean;
   editing: boolean;
   selected: boolean;
@@ -65,7 +67,7 @@ type Props = {
   onDblClick: (id: string) => void;
 };
 
-export function ElementNode({ el, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
+export function ElementNode({ el, hidden, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
   const common = {
     id: el.id,
     name: "element",
@@ -80,6 +82,15 @@ export function ElementNode({ el, draggable, editing, onDragStart, onDragMove, o
     onDblClick: () => onDblClick(el.id),
     onDblTap: () => onDblClick(el.id),
   };
+
+  if (hidden) {
+    return (
+      <Group {...common} draggable={false}>
+        <Rect width={el.width} height={el.height} fill="#e2e8f0" cornerRadius={3} stroke="#cbd5e1" dash={[8, 6]} />
+        <Text text={"Private note"} width={el.width} height={el.height} align="center" verticalAlign="middle" fontSize={15} fill="#64748b" listening={false} />
+      </Group>
+    );
+  }
 
   switch (el.type) {
     case "sticky":

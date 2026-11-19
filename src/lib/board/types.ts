@@ -25,6 +25,8 @@ export interface BaseElement {
   text?: string;
   fontSize?: number;
   locked?: boolean;
+  /** Set on elements created while private mode is on; others see them hidden until it ends. */
+  privateOwner?: string;
 }
 
 export interface ConnectorElement extends BaseElement {
