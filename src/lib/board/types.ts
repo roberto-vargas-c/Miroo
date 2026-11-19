@@ -15,7 +15,13 @@ export type ElementType =
   | "area" // measured polygon
   | "wall" // rotated rect drawn from A to B
   | "cloud" // revision cloud (redline)
-  | "symbol"; // plan symbol from the library (door, window, furniture…)
+  | "symbol" // plan symbol from the library (door, window, furniture…)
+  // Content blocks
+  | "card" // task card with assignee, due date and status
+  | "table"
+  | "topic" // mind map node
+  | "shape" // extra diagram shapes (triangle, cylinder, …)
+  | "embed"; // link / video / Figma etc.
 
 export interface BaseElement {
   id: string;
@@ -73,7 +79,43 @@ export interface SymbolElement extends BaseElement {
   symbol: string;
 }
 
-export type BoardElement = BaseElement | ConnectorElement | PenElement | ImageElement | MeasureElement | SymbolElement;
+export type CardStatus = "todo" | "doing" | "done" | "blocked";
+export interface CardElement extends BaseElement {
+  type: "card";
+  assignee?: { id: string; name: string; color: string } | null;
+  due?: string | null; // yyyy-mm-dd
+  status: CardStatus;
+}
+
+export interface TableElement extends BaseElement {
+  type: "table";
+  cells: string[][]; // [row][col]
+  header: boolean;
+}
+
+export interface TopicElement extends BaseElement {
+  type: "topic";
+  /** Root topic of the mind map this node belongs to (its own id for a root). */
+  root: string;
+  level: number;
+}
+
+export interface ShapeElement extends BaseElement {
+  type: "shape";
+  shape: string;
+}
+
+export interface EmbedElement extends BaseElement {
+  type: "embed";
+  url: string;
+  title?: string;
+  site?: string;
+  description?: string;
+}
+
+export type BoardElement =
+  | BaseElement | ConnectorElement | PenElement | ImageElement | MeasureElement | SymbolElement
+  | CardElement | TableElement | TopicElement | ShapeElement | EmbedElement;
 
 export function hasPoints(el: BoardElement): el is PenElement | MeasureElement {
   return el.type === "pen" || el.type === "dimension" || el.type === "area";
@@ -112,6 +154,19 @@ export function makeElement(type: ElementType, x: number, y: number, extra: Part
       return { ...base, width: 240, height: 40, fill: "transparent", stroke: "#111827", text: "Text", fontSize: 24, ...extra } as BaseElement;
     case "frame":
       return { ...base, width: 800, height: 520, fill: "#ffffff", stroke: "#cbd5e1", text: "Frame", z: 0, ...extra } as BaseElement;
+    case "card":
+      return { ...base, width: 260, height: 120, fill: "#ffffff", stroke: "#2563eb", text: "New task", fontSize: 16, status: "todo", ...extra } as CardElement;
+    case "table":
+      return {
+        ...base, width: 480, height: 160, fill: "#ffffff", stroke: "#94a3b8", fontSize: 14, header: true,
+        cells: [["Room", "Area", "Notes"], ["", "", ""], ["", "", ""], ["", "", ""]], ...extra,
+      } as TableElement;
+    case "topic":
+      return { ...base, width: 200, height: 56, fill: "#0f8573", stroke: "#0f8573", text: "Central idea", fontSize: 18, root: base.id, level: 0, ...extra } as TopicElement;
+    case "shape":
+      return { ...base, width: 160, height: 120, fill: "#ffffff", stroke: "#1f2937", text: "", fontSize: 16, shape: "triangle", ...extra } as ShapeElement;
+    case "embed":
+      return { ...base, width: 360, height: 120, fill: "#ffffff", stroke: "#cbd5e1", url: "", ...extra } as EmbedElement;
     default:
       return { ...base, ...extra } as BaseElement;
   }

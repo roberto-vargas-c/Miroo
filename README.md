@@ -15,6 +15,13 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Moving a frame moves everything inside it
 - Export the board as PNG
 
+**Content blocks**
+- Task cards with status, assignee (any workspace member) and due date, with an overdue warning
+- Tables: double-click a cell to edit, Tab moves to the next cell, add or remove rows and columns, optional header row
+- Mind maps (G): Tab adds a branch, Enter adds a sibling; branches are colored and connected automatically
+- Diagram shapes: triangle, hexagon, pentagon, parallelogram, trapezoid, database, star, block arrow, chevron, speech bubble, document, cross
+- Embeds: paste or add any link to get a preview card; YouTube, Vimeo, Loom and Figma open inline
+
 **Collaboration**
 - Real-time multi-user editing (Yjs CRDT over WebSockets), saved to Postgres
 - Live cursors with names, presence avatars, and highlights of what others have selected

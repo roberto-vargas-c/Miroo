@@ -15,6 +15,10 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
   }
   const isMember = !!access.role;
   const teams = isMember ? await db.team.findMany({ where: { workspaceId: board.workspaceId }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [];
+  const members = isMember
+    ? (await db.workspaceMember.findMany({ where: { workspaceId: board.workspaceId }, select: { user: { select: { id: true, name: true, color: true } } } }))
+        .map((m) => m.user).sort((a, b) => a.name.localeCompare(b.name))
+    : [];
   return (
     <BoardApp
       boardId={board.id}
@@ -26,6 +30,7 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
       shareToken={share ?? null}
       sharing={isMember ? { linkAccess: board.linkAccess, visibility: board.visibility, teamId: board.teamId, shareToken: board.shareToken } : null}
       teams={teams}
+      members={members}
       realtimeUrl={process.env.NEXT_PUBLIC_REALTIME_URL ?? "ws://localhost:1234"}
     />
   );

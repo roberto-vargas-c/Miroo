@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Group, Rect, Text, Ellipse, Line, Image as KImage, Path, Label as KLabel, Tag } from "react-konva";
-import type { BoardElement, ImageElement, MeasureElement, PenElement, SymbolElement } from "@/lib/board/types";
+import type {
+  BoardElement, CardElement, EmbedElement, ImageElement, MeasureElement, PenElement, ShapeElement, SymbolElement, TableElement, TopicElement,
+} from "@/lib/board/types";
+import { SHAPE_BY_ID } from "@/lib/board/shapes";
 import { cloudPath, polygonCentroid, SYMBOL_BY_ID } from "@/lib/board/arch";
 
 function useImage(src: string) {
@@ -62,6 +65,8 @@ type Props = {
   measure?: string;
   /** Current zoom, so measurement labels stay readable. */
   zoom?: number;
+  /** Table cell being edited (hidden so the editor overlay shows instead). */
+  editingCell?: [number, number] | null;
   draggable: boolean;
   editing: boolean;
   selected: boolean;
@@ -72,7 +77,7 @@ type Props = {
   onDblClick: (id: string) => void;
 };
 
-export function ElementNode({ el, hidden, measure, zoom = 1, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
+export function ElementNode({ el, hidden, measure, zoom = 1, editingCell, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
   const common = {
     id: el.id,
     name: "element",
@@ -210,6 +215,102 @@ export function ElementNode({ el, hidden, measure, zoom = 1, draggable, editing,
           <Label el={{ ...el, fill: "#ffffff" }} editing={editing} />
         </Group>
       );
+    case "card": {
+      const c = el as CardElement;
+      const st = CARD_STATUS[c.status] ?? CARD_STATUS.todo;
+      const today = new Date().toISOString().slice(0, 10);
+      const overdue = !!c.due && c.due < today && c.status !== "done";
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} fill="#ffffff" cornerRadius={8} stroke="#e2e8f0"
+            shadowColor="#0f172a" shadowOpacity={0.1} shadowBlur={10} shadowOffsetY={3} />
+          <Rect width={6} height={el.height} fill={st.color} cornerRadius={[8, 0, 0, 8]} />
+          {!editing && (
+            <Text x={18} y={12} width={el.width - 30} height={el.height - 46} text={el.text || "Untitled task"} fontSize={el.fontSize ?? 16}
+              fontStyle="600" fill="#0f172a" wrap="word" ellipsis lineHeight={1.25} listening={false} />
+          )}
+          <KLabel x={18} y={el.height - 30} listening={false}>
+            <Tag fill={st.bg} cornerRadius={9} />
+            <Text text={st.label} fontSize={11} padding={4} fill={st.color} fontStyle="600" />
+          </KLabel>
+          {c.due && (
+            <Text x={18 + st.label.length * 7 + 22} y={el.height - 26} text={`${overdue ? "⚠ " : ""}${formatDue(c.due)}`} fontSize={12}
+              fill={overdue ? "#dc2626" : "#64748b"} listening={false} />
+          )}
+          {c.assignee && (
+            <Group x={el.width - 26} y={el.height - 22} listening={false}>
+              <Ellipse radiusX={13} radiusY={13} fill={c.assignee.color} />
+              <Text x={-13} y={-6} width={26} align="center" text={initials(c.assignee.name)} fontSize={11} fontStyle="bold" fill="#ffffff" />
+            </Group>
+          )}
+        </Group>
+      );
+    }
+    case "table": {
+      const t = el as TableElement;
+      const rows = t.cells.length, cols = t.cells[0]?.length ?? 1;
+      const rh = el.height / rows, cw = el.width / cols;
+      const fs = el.fontSize ?? 14;
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} fill="#ffffff" stroke={el.stroke} strokeWidth={1.2} cornerRadius={4} />
+          {t.header && <Rect width={el.width} height={rh} fill="#f1f5f9" cornerRadius={[4, 4, 0, 0]} listening={false} />}
+          {Array.from({ length: rows - 1 }, (_, r) => (
+            <Line key={`r${r}`} points={[0, (r + 1) * rh, el.width, (r + 1) * rh]} stroke={el.stroke} strokeWidth={1} listening={false} />
+          ))}
+          {Array.from({ length: cols - 1 }, (_, c) => (
+            <Line key={`c${c}`} points={[(c + 1) * cw, 0, (c + 1) * cw, el.height]} stroke={el.stroke} strokeWidth={1} listening={false} />
+          ))}
+          {t.cells.map((row, r) => row.map((cell, c) => (
+            editingCell && editingCell[0] === r && editingCell[1] === c ? null : (
+              <Text key={`${r}-${c}`} x={c * cw + 8} y={r * rh} width={cw - 16} height={rh} text={cell} fontSize={fs} verticalAlign="middle"
+                fontStyle={t.header && r === 0 ? "bold" : "normal"} fill="#0f172a" ellipsis wrap="none" listening={false} />
+            )
+          )))}
+        </Group>
+      );
+    }
+    case "topic": {
+      const t = el as TopicElement;
+      const root = t.level === 0;
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} cornerRadius={Math.min(el.height / 2, 28)} fill={root ? el.fill : "#ffffff"}
+            stroke={el.stroke} strokeWidth={root ? 0 : 2} shadowColor="#0f172a" shadowOpacity={root ? 0.15 : 0.06} shadowBlur={8} shadowOffsetY={2} />
+          <Label el={{ ...el, fill: root ? el.fill : "#ffffff", type: "rect" } as BoardElement} editing={editing} />
+        </Group>
+      );
+    }
+    case "shape": {
+      const def = SHAPE_BY_ID.get((el as ShapeElement).shape);
+      if (!def) return null;
+      return (
+        <Group {...common}>
+          <Path data={def.path(el.width, el.height)} fill={el.fill} stroke={el.stroke} strokeWidth={2} lineJoin="round" />
+          <Label el={{ ...el, type: "rect" } as BoardElement} editing={editing} />
+        </Group>
+      );
+    }
+    case "embed": {
+      const e = el as EmbedElement;
+      const video = /youtube\.com|youtu\.be|vimeo\.com|loom\.com/.test(e.url);
+      const icon = video ? "▶" : /figma\.com/.test(e.url) ? "✦" : /maps\.|goo\.gl\/maps/.test(e.url) ? "⌖" : "🔗";
+      return (
+        <Group {...common}>
+          <Rect width={el.width} height={el.height} fill="#ffffff" stroke={el.stroke} cornerRadius={10}
+            shadowColor="#0f172a" shadowOpacity={0.08} shadowBlur={10} shadowOffsetY={3} />
+          <Rect x={12} y={12} width={el.height - 24} height={el.height - 24} cornerRadius={8} fill={video ? "#fee2e2" : "#e0f2fe"} listening={false} />
+          <Text x={12} y={12} width={el.height - 24} height={el.height - 24} align="center" verticalAlign="middle" text={icon}
+            fontSize={(el.height - 24) * 0.4} fill={video ? "#dc2626" : "#0369a1"} listening={false} />
+          <Text x={el.height} y={16} width={el.width - el.height - 12} text={e.title || e.url} fontSize={15} fontStyle="600"
+            fill="#0f172a" wrap="word" ellipsis height={40} listening={false} />
+          <Text x={el.height} y={60} width={el.width - el.height - 12} text={e.description ?? ""} fontSize={12} fill="#475569"
+            ellipsis wrap="word" height={Math.max(0, el.height - 92)} listening={false} />
+          <Text x={el.height} y={el.height - 26} width={el.width - el.height - 12} text={e.site || hostOf(e.url)} fontSize={11} fill="#94a3b8"
+            ellipsis wrap="none" listening={false} />
+        </Group>
+      );
+    }
     case "symbol": {
       const def = SYMBOL_BY_ID.get((el as SymbolElement).symbol);
       if (!def) return null;
@@ -225,4 +326,24 @@ export function ElementNode({ el, hidden, measure, zoom = 1, draggable, editing,
     default:
       return null;
   }
+}
+
+export const CARD_STATUS: Record<string, { label: string; color: string; bg: string }> = {
+  todo: { label: "To do", color: "#475569", bg: "#f1f5f9" },
+  doing: { label: "In progress", color: "#2563eb", bg: "#dbeafe" },
+  blocked: { label: "Blocked", color: "#dc2626", bg: "#fee2e2" },
+  done: { label: "Done", color: "#16a34a", bg: "#dcfce7" },
+};
+
+function initials(name: string) {
+  return name.split(/\s+/).map((p) => p[0]).join("").slice(0, 2).toUpperCase();
+}
+
+function formatDue(d: string) {
+  const dt = new Date(`${d}T00:00:00`);
+  return isNaN(dt.getTime()) ? d : dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function hostOf(url: string) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
