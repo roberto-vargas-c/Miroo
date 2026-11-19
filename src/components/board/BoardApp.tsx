@@ -3,8 +3,8 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X } from "lucide-react";
-import { makeElement, type BoardElement, type ImageElement, type EmbedElement } from "@/lib/board/types";
+import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles } from "lucide-react";
+import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
 import { unionRect, bounds as elBounds } from "./geometry";
@@ -22,6 +22,8 @@ import { PropertiesBar } from "./PropertiesBar";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
 import { BoardMenu, CsvDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
+import { AiPanel, type AiResults } from "./AiPanel";
+import { layoutClusters, summaryElement, ideaStickies, flowchartElements, mindmapElements } from "./aiLayout";
 
 const Canvas = dynamic(() => import("./Canvas").then((m) => m.Canvas), { ssr: false });
 
@@ -36,6 +38,8 @@ export type BoardAppProps = {
   sharing: Sharing | null;
   teams: { id: string; name: string }[];
   realtimeUrl: string;
+  /** The server has an Anthropic API key, so AI assist works. */
+  ai?: boolean;
   /** Workspace members, for assigning task cards. */
   members: { id: string; name: string; color: string }[];
 };
@@ -46,6 +50,7 @@ export function BoardApp(p: BoardAppProps) {
   const [preview, setPreview] = useState<{ id: string; label: string; elements: BoardElement[] } | null>(null);
   const elements = preview?.elements ?? liveElements;
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const [dialog, setDialog] = useState<"csv" | "template" | null>(null);
   const [exporting, setExporting] = useState(false);
   const canEditBoard = p.canEdit && (me?.canEdit ?? p.canEdit);
@@ -440,6 +445,76 @@ export function BoardApp(p: BoardAppProps) {
     setSelection(copies.map((c) => c.id));
   };
 
+  // ── AI assist: apply results to the board ──
+  const selectionBox = () => (selected.length ? unionRect(selected.map(elBounds)) : null);
+  const besideSelection = () => {
+    const b = selectionBox();
+    return b ? { x: b.x + b.width + 80, y: b.y } : canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+  };
+  /** Shift a group of new elements right until it no longer covers anything already on the board. */
+  const placeClear = (els: BoardElement[]) => {
+    const box = unionRect(els.filter((e) => e.type !== "connector").map(elBounds));
+    if (!box) return els;
+    const others = elements.filter((e) => e.type !== "connector").map(elBounds);
+    const gap = 60;
+    let dx = 0;
+    for (let i = 0; i < 100; i++) {
+      const r = { ...box, x: box.x + dx };
+      const hits = others.filter((o) => o.x < r.x + r.width + gap && o.x + o.width + gap > r.x && o.y < r.y + r.height + gap && o.y + o.height + gap > r.y);
+      if (!hits.length) break;
+      dx = Math.max(...hits.map((o) => o.x + o.width)) + gap * 2 - box.x;
+    }
+    if (!dx) return els;
+    return els.map((e) => (e.type === "connector"
+      ? { ...e, from: { ...(e as ConnectorElement).from, x: (e as ConnectorElement).from.x + dx }, to: { ...(e as ConnectorElement).to, x: (e as ConnectorElement).to.x + dx } }
+      : { ...e, x: e.x + dx })) as BoardElement[];
+  };
+  /** Bring AI results into view, keeping clear of the AI panel on the right. */
+  const revealEls = (els: BoardElement[]) => {
+    const b = unionRect(els.filter((e) => e.type !== "connector").map(elBounds));
+    if (b) requestAnimationFrame(() => canvasRef.current?.reveal(b, aiOpen ? 344 : 0));
+  };
+  const aiCluster = (r: AiResults["cluster"]) => {
+    const b = selectionBox();
+    const byId = new Map(elements.map((e) => [e.id, e]));
+    const { updates, frames } = layoutClusters(r.clusters, byId, b ? { x: b.x, y: b.y } : { x: 0, y: 0 });
+    api.add(frames);
+    api.updateMany(updates);
+    setSelection(updates.map((u) => u.id));
+    revealEls(frames);
+    setToast(`Grouped into ${frames.length} themes. Undo puts the notes back.`);
+  };
+  const aiSummary = (r: AiResults["summarize"]) => {
+    const [el] = placeClear([summaryElement(r, besideSelection())]);
+    api.add([el]);
+    setSelection([el.id]);
+    revealEls([...selected, el]);
+    setToast("Added a summary next to the selection.");
+  };
+  const aiIdeas = (r: AiResults["ideas"]) => {
+    const els = placeClear(ideaStickies(r.ideas, besideSelection()));
+    api.add(els);
+    setSelection(els.map((e) => e.id));
+    revealEls([...selected, ...els]);
+    setToast(`Added ${els.length} idea notes.`);
+  };
+  const aiDiagram = (r: AiResults["diagram"], kind: "flowchart" | "mindmap") => {
+    const els = kind === "flowchart" ? flowchartElements(r.nodes, r.edges, { x: 0, y: 0 }) : mindmapElements(r.nodes, { x: 0, y: 0 });
+    const shapes = els.filter((e) => e.type !== "connector");
+    const b = unionRect(shapes.map(elBounds));
+    if (!b) { setToast("The AI didn't return a diagram. Try describing it differently."); return; }
+    const c = canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    const dx = c.x - (b.x + b.width / 2), dy = c.y - (b.y + b.height / 2);
+    const moved = placeClear(els.map((e) => (e.type === "connector"
+      ? { ...e, from: { ...(e as ConnectorElement).from, x: (e as ConnectorElement).from.x + dx, y: (e as ConnectorElement).from.y + dy },
+          to: { ...(e as ConnectorElement).to, x: (e as ConnectorElement).to.x + dx, y: (e as ConnectorElement).to.y + dy } }
+      : { ...e, x: e.x + dx, y: e.y + dy })) as BoardElement[]);
+    api.add(moved);
+    setSelection(moved.filter((e) => e.type !== "connector").map((e) => e.id));
+    revealEls(moved);
+    setToast(`Added a ${kind === "flowchart" ? "flowchart" : "mind map"} with ${shapes.filter((e) => e.type !== "text").length} boxes.`);
+  };
+
   const exportBoard = async (kind: ExportKind) => {
     const c = canvasRef.current;
     if (!c || exporting) return;
@@ -614,7 +689,7 @@ export function BoardApp(p: BoardAppProps) {
           <ReactionPicker onReact={react} />
           <PrivateModeButton mode={session.privateMode} canEdit={canEdit} me={me?.id ?? ""} onChange={setPrivateMode} />
           <button className={`btn-ghost p-1.5 ${voteOpen || vote?.open ? "bg-slate-100" : ""} ${vote?.open ? "text-brand-700" : ""}`} title="Voting"
-            onClick={() => { setVoteOpen((o) => !o); setCommentsOpen(false); setHistoryOpen(false); }}>
+            onClick={() => { setVoteOpen((o) => !o); setCommentsOpen(false); setHistoryOpen(false); setAiOpen(false); }}>
             <Vote size={18} />
           </button>
           <div className="relative">
@@ -627,12 +702,18 @@ export function BoardApp(p: BoardAppProps) {
               </div>
             )}
           </div>
-          <button className={`btn-ghost p-1.5 ${commentsOpen ? "bg-slate-100" : ""}`} title="Comments" onClick={() => { setCommentsOpen((o) => !o); setVoteOpen(false); setHistoryOpen(false); }}>
+          <button className={`btn-ghost p-1.5 ${commentsOpen ? "bg-slate-100" : ""}`} title="Comments" onClick={() => { setCommentsOpen((o) => !o); setVoteOpen(false); setHistoryOpen(false); setAiOpen(false); }}>
             <MessageSquare size={18} />
           </button>
+          {canEdit && (
+            <button className={`btn-ghost p-1.5 ${aiOpen ? "bg-violet-50 text-violet-700" : "text-violet-600"}`} title="AI assist: group, summarize, ideas, diagrams"
+              onClick={() => { setAiOpen((o) => !o); setHistoryOpen(false); setCommentsOpen(false); setVoteOpen(false); }}>
+              <Sparkles size={18} />
+            </button>
+          )}
           {canEditBoard && (
             <button className={`btn-ghost p-1.5 ${historyOpen ? "bg-slate-100" : ""}`} title="Version history"
-              onClick={() => { setHistoryOpen((o) => !o); setCommentsOpen(false); setVoteOpen(false); }}>
+              onClick={() => { setHistoryOpen((o) => !o); setAiOpen(false); setCommentsOpen(false); setVoteOpen(false); }}>
               <History size={18} />
             </button>
           )}
@@ -706,6 +787,10 @@ export function BoardApp(p: BoardAppProps) {
           <button className="rounded-full bg-white/15 px-3 py-0.5 hover:bg-white/25" onClick={() => setPreview(null)}>Back to the live board</button>
         </div>
       )}
+      {aiOpen && canEdit && !presenting && (
+        <AiPanel enabled={!!p.ai} boardId={p.boardId} q={q} selected={selected} all={elements}
+          onCluster={aiCluster} onSummary={aiSummary} onIdeas={aiIdeas} onDiagram={aiDiagram} onClose={() => setAiOpen(false)} />
+      )}
       {historyOpen && canEditBoard && !presenting && (
         <VersionPanel boardId={p.boardId} q={q} api={rawApi} previewing={preview?.id ?? null}
           onPreview={(v) => { setSelection([]); setPreview(v); if (v) requestAnimationFrame(() => canvasRef.current?.fitContent()); }}
@@ -725,7 +810,7 @@ export function BoardApp(p: BoardAppProps) {
         <TemplateDialog boardId={p.boardId} title={title} elements={liveElements} onClose={() => setDialog(null)}
           onDone={(msg) => { setDialog(null); setToast(msg); }} />
       )}
-      {voteOpen && !commentsOpen && !historyOpen && !presenting && (
+      {voteOpen && !commentsOpen && !historyOpen && !aiOpen && !presenting && (
         <VotePanel vote={vote} votes={votes} myVotes={myVotes} canEdit={canEdit} me={me?.name ?? ""} elements={elements}
           onStart={(v) => { api.setSession("vote", v); setSelection([]); }}
           onEnd={() => vote && api.setSession("vote", { ...vote, open: false })}

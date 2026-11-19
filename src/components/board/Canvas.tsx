@@ -51,6 +51,8 @@ export type CanvasHandle = {
   cameraFor: (r: R, pad?: number) => Camera;
   size: () => { width: number; height: number };
   viewportCenter: () => { x: number; y: number };
+  /** Move the camera (zooming out if needed, never in) so a world rect is on screen, leaving `rightInset` px free for a side panel. */
+  reveal: (r: R, rightInset?: number) => void;
   /**
    * Render part of the board to a PNG data URL. `rect` is in board units (default: everything,
    * padded); `pixelsPerUnit` is the target resolution, lowered if the image would be too big.
@@ -202,6 +204,17 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     },
     size: () => liveSize(),
     viewportCenter: () => { const size = liveSize(); return toWorld(size.width / 2, size.height / 2); },
+    reveal: (r, rightInset = 0) => {
+      const size = liveSize();
+      const padX = 90, padTop = 100, padBottom = 70;
+      const area = { left: padX, top: padTop, right: size.width - rightInset - 24, bottom: size.height - padBottom };
+      const bb = { ...r, y: r.y - 30, height: r.height + 30 };
+      const sx = bb.x * camera.scale + camera.x, sy = bb.y * camera.scale + camera.y;
+      if (sx >= area.left && sy >= area.top && sx + bb.width * camera.scale <= area.right && sy + bb.height * camera.scale <= area.bottom) return;
+      const w = Math.max(area.right - area.left, 100), h = Math.max(area.bottom - area.top, 100);
+      const scale = clampScale(Math.min(camera.scale, w / Math.max(bb.width, 1), h / Math.max(bb.height, 1)));
+      setCamera({ scale, x: area.left + w / 2 - (bb.x + bb.width / 2) * scale, y: area.top + h / 2 - (bb.y + bb.height / 2) * scale });
+    },
     exportImage: (opts) => {
       const stage = stageRef.current;
       const all = unionRect(elements.map(bounds));
