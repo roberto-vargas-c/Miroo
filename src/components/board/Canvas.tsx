@@ -14,10 +14,12 @@ import {
   type SymbolElement,
   type EmbedElement,
   type VideoElement,
+  type WallElement,
   type ConnectorStyle,
   type TableElement,
   type TopicElement,
   hasPoints,
+  fontFamily,
 } from "@/lib/board/types";
 import { ElementNode } from "./ElementNode";
 import {
@@ -84,6 +86,14 @@ type Props = {
   /** Stroke width for the pen / highlighter in screen-independent board units. */
   penWidth?: number;
   onOpenVideo?: (el: VideoElement) => void;
+  onOpenDoc?: (id: string) => void;
+  /** An element waiting to be put down: shown as a ghost under the pointer; a click calls onPlace. */
+  placing?: BoardElement | null;
+  onPlace?: (at: { x: number; y: number }) => void;
+  onCancelPlace?: () => void;
+  showAuthors?: boolean;
+  /** A document was duplicated or pasted: copy its content to the new one. */
+  onCopyDoc?: (fromId: string, toId: string) => void;
   /** What the scroll wheel does: auto (mouse zooms, trackpad pans), always zoom, or always pan. */
   wheelMode?: WheelMode;
   /** Connector style for new connectors. */
@@ -118,7 +128,7 @@ type Gesture =
   | { kind: "connector"; fromId?: string; x0: number; y0: number; x1: number; y1: number }
   | { kind: "pen"; points: number[]; highlight?: boolean }
   | { kind: "line"; purpose: "measure" | "wall" | "calibrate"; x0: number; y0: number; x1: number; y1: number }
-  | { kind: "area"; points: number[]; cx: number; cy: number };
+  | { kind: "area"; points: number[]; cx: number; cy: number; wall?: boolean };
 
 export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref) {
   const { elements, api, peers, canEdit, tool, setTool, selection, setSelection, camera, setCamera, penColor, onComment, overlay,
@@ -136,8 +146,32 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const [editingId, setEditingId] = useState<string | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const shiftDown = useRef(false);
+  const [shiftHeld, setShiftHeld] = useState(false);
+  // Ghost preview of what a click will put down: a picked sticker/doc, or the sticky, card, text or symbol tool.
+  const [ghostPt, setGhostPt] = useState<{ x: number; y: number } | null>(null);
+  const ghostFor = useMemo((): BoardElement | null => {
+    if (!canEdit) return null;
+    if (props.placing) return props.placing;
+    if (tool === "sticky" || tool === "text" || tool === "card" || tool === "mindmap") {
+      const el = makeElement(tool === "mindmap" ? "topic" : tool, 0, 0);
+      return { ...el, x: -el.width / 2, y: -el.height / 2 };
+    }
+    if (tool === "symbol" && placingSymbol) {
+      const def = SYMBOL_BY_ID.get(placingSymbol);
+      if (!def) return null;
+      const k = metersPerPxAt(elements, ghostPt ?? { x: 0, y: 0 }, boardScale);
+      const pxPerM = k ? 1 / k : DEFAULT_PX_PER_METER;
+      const w = def.size[0] * pxPerM, h = def.size[1] * pxPerM;
+      return Object.assign(makeElement("symbol", -w / 2, -h / 2, { width: w, height: h, fill: "#ffffff", stroke: "#111827" }), { symbol: def.id });
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.placing, tool, placingSymbol, canEdit, boardScale, elements.length]);
+  /** Element under the pointer while the connector tool is active (its connection points are shown). */
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  useEffect(() => { if (tool !== "connector") setHoverId(null); }, [tool]);
   useEffect(() => {
-    const f = (e: KeyboardEvent) => { shiftDown.current = e.shiftKey; };
+    const f = (e: KeyboardEvent) => { shiftDown.current = e.shiftKey; setShiftHeld(e.shiftKey); };
     window.addEventListener("keydown", f);
     window.addEventListener("keyup", f);
     return () => { window.removeEventListener("keydown", f); window.removeEventListener("keyup", f); };
@@ -338,6 +372,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     };
   }, [setCamera, zoomAround, onManualCamera]);
   const pinchEnded = useRef(0);
+  const lastAreaDown = useRef<{ x: number; y: number; t: number } | null>(null);
   const pinching = () => !!pinch.current.start || performance.now() - pinchEnded.current < 150;
 
   // ── Keyboard ─────────────────────────────────────────────────────────────
@@ -351,7 +386,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       if (isTyping()) return;
       const mod = e.metaKey || e.ctrlKey;
       if (e.code === "Space") { setSpaceDown(true); e.preventDefault(); return; }
-      if (e.key === "Escape") { setGesture(null); setSelection([]); setTool("select"); return; }
+      if (e.key === "Escape") { props.onCancelPlace?.(); setGesture(null); setSelection([]); setTool("select"); return; }
       if (e.key === "Enter" && finishAreaRef.current()) return;
       if (mod && e.key.toLowerCase() === "a") { e.preventDefault(); setSelection(elements.map((x) => x.id)); return; }
       if (!canEdit) return;
@@ -369,6 +404,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         if (!src.length) return;
         e.preventDefault();
         const copies = duplicate(src);
+        src.forEach((s, i) => { if (s.type === "doc") props.onCopyDoc?.(s.id, copies[i].id); });
         api.add(copies);
         setSelection(copies.map((c) => c.id));
         return;
@@ -411,6 +447,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const onPointerDown = (e: KonvaEventObject<PointerEvent>) => {
     if (pinching()) return;
     const p = pointerWorld();
+    if (p && props.placing && canEdit && e.evt.button === 0) { props.onPlace?.(p); return; }
     const sp = stageRef.current?.getPointerPosition();
     if (!p || !sp) return;
     if (editingId) commitEdit();
@@ -472,17 +509,29 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       return;
     }
     if (tool === "pen" || tool === "highlighter") { setGesture({ kind: "pen", points: [p.x, p.y], highlight: tool === "highlighter" }); return; }
-    if (tool === "measure" || tool === "wall" || tool === "calibrate") {
+    if (tool === "measure" || tool === "calibrate") {
       setGesture({ kind: "line", purpose: tool, x0: p.x, y0: p.y, x1: p.x, y1: p.y });
       return;
     }
     if (tool === "cloud") { setGesture({ kind: "shape", type: "cloud", x0: p.x, y0: p.y, x1: p.x, y1: p.y }); return; }
-    if (tool === "area") {
-      if (gesture?.kind !== "area") { setGesture({ kind: "area", points: [p.x, p.y], cx: p.x, cy: p.y }); return; }
+    if (tool === "area" || tool === "wall") {
+      const wall = tool === "wall";
+      if (gesture?.kind !== "area") {
+        const sp = stageRef.current?.getPointerPosition();
+        lastAreaDown.current = sp ? { x: sp.x, y: sp.y, t: performance.now() } : null;
+        setGesture({ kind: "area", points: [p.x, p.y], cx: p.x, cy: p.y, wall }); return;
+      }
       const [fx, fy] = gesture.points;
-      if (gesture.points.length >= 6 && Math.hypot(p.x - fx, p.y - fy) < 10 / camera.scale) { finishArea(); return; }
+      // A second click on the same spot finishes the shape (Konva's dblclick also fires for two quick clicks far apart).
+      const sp = stageRef.current?.getPointerPosition();
+      const prev = lastAreaDown.current;
+      lastAreaDown.current = sp ? { x: sp.x, y: sp.y, t: performance.now() } : null;
+      if (sp && prev && performance.now() - prev.t < 450 && Math.hypot(sp.x - prev.x, sp.y - prev.y) < 6) { finishArea(); return; }
+      if (gesture.points.length >= (wall ? 4 : 6) && Math.hypot(p.x - fx, p.y - fy) < 10 / camera.scale) { finishArea(true); return; }
       const lx = gesture.points[gesture.points.length - 2], ly = gesture.points[gesture.points.length - 1];
-      if (Math.hypot(p.x - lx, p.y - ly) > 2 / camera.scale) setGesture({ ...gesture, points: [...gesture.points, p.x, p.y] });
+      // Shift keeps each new segment at 15° steps from the last corner.
+      const q = shiftDown.current ? snapAngle(lx, ly, p.x, p.y) : p;
+      if (Math.hypot(q.x - lx, q.y - ly) > 2 / camera.scale) setGesture({ ...gesture, points: [...gesture.points, q.x, q.y] });
       return;
     }
     if (tool === "symbol" && placingSymbol) {
@@ -508,6 +557,11 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     if (!p || !sp) return;
     const now = performance.now();
     if (now - lastCursor.current > 40) { lastCursor.current = now; api.setCursor(p); }
+    if (ghostFor) setGhostPt(p);
+    if (tool === "connector") {
+      const h = hitElement(elements, p, gesture?.kind === "connector" ? gesture.fromId : undefined)?.id ?? null;
+      if (h !== hoverId) setHoverId(h);
+    }
     if (!gesture) return;
     switch (gesture.kind) {
       case "pan":
@@ -519,16 +573,23 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         setGesture({ ...gesture, x1: p.x, y1: p.y });
         break;
       case "pen":
-        setGesture({ ...gesture, points: [...gesture.points, p.x, p.y] });
+        // Shift draws a straight line from where the stroke started (15° steps).
+        if (shiftDown.current) {
+          const q = snapAngle(gesture.points[0], gesture.points[1], p.x, p.y);
+          setGesture({ ...gesture, points: [gesture.points[0], gesture.points[1], q.x, q.y] });
+        } else setGesture({ ...gesture, points: [...gesture.points, p.x, p.y] });
         break;
       case "line": {
         const q = shiftDown.current ? snapAngle(gesture.x0, gesture.y0, p.x, p.y) : p;
         setGesture({ ...gesture, x1: q.x, y1: q.y });
         break;
       }
-      case "area":
-        setGesture({ ...gesture, cx: p.x, cy: p.y });
+      case "area": {
+        const n = gesture.points.length;
+        const q = shiftDown.current ? snapAngle(gesture.points[n - 2], gesture.points[n - 1], p.x, p.y) : p;
+        setGesture({ ...gesture, cx: q.x, cy: q.y });
         break;
+      }
     }
   };
 
@@ -607,7 +668,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     }
   };
 
-  function finishArea(): boolean {
+  function finishArea(close = false): boolean {
     const g = gesture;
     if (g?.kind !== "area") return false;
     setGesture(null);
@@ -618,14 +679,25 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       if (n && Math.hypot(g.points[i] - pts[n - 2], g.points[i + 1] - pts[n - 1]) < 3 / camera.scale) continue;
       pts.push(g.points[i], g.points[i + 1]);
     }
-    if (pts.length < 6) return true;
+    if (pts.length < (g.wall ? 4 : 6)) return true;
     const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
     const x = Math.min(...xs), y = Math.min(...ys);
+    const rel = pts.map((v, i) => (i % 2 === 0 ? v - x : v - y));
+    if (g.wall) {
+      // 20 cm thick at plan scale.
+      const k = metersPerPxAt(elements, { x: (x + Math.max(...xs)) / 2, y: (y + Math.max(...ys)) / 2 }, boardScale);
+      const el = makeElement("wall", x, y, {
+        width: Math.max(1, Math.max(...xs) - x), height: Math.max(1, Math.max(...ys) - y), fill: "#374151", stroke: "#1f2937",
+      }) as WallElement;
+      Object.assign(el, { points: rel, thickness: k ? 0.2 / k : 10, closed: close && pts.length >= 6 });
+      api.add([el]);
+      return true;
+    }
     const el = makeElement("area", x, y, {
       width: Math.max(1, Math.max(...xs) - x), height: Math.max(1, Math.max(...ys) - y),
       fill: "rgba(20,163,139,0.14)", stroke: "#0f766e",
     }) as MeasureElement;
-    el.points = pts.map((v, i) => (i % 2 === 0 ? v - x : v - y));
+    el.points = rel;
     api.add([el]);
     return true;
   }
@@ -756,6 +828,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     if (!el) return;
     if (el.type === "embed") { onOpenEmbed?.(el as EmbedElement); return; }
     if (el.type === "video") { onOpenVideo?.(el as VideoElement); return; }
+    if (el.type === "doc") { props.onOpenDoc?.(el.id); return; }
     if (!canEdit || hiddenIds?.has(id) || onVote) return;
     if (el.type === "table") {
       const p = pointerWorld();
@@ -849,7 +922,8 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       padding: pad,
       fontSize: (isFrame ? 15 : editing.fontSize ?? 16) * s,
       lineHeight: 1.25,
-      textAlign: editing.type === "text" || isFrame ? "left" : "center",
+      fontFamily: isFrame ? undefined : fontFamily(editing.font),
+      textAlign: isFrame ? "left" : editing.align ?? (editing.type === "text" ? "left" : "center"),
       background: editing.type === "text" || isFrame ? "rgba(255,255,255,0.9)" : editing.type === "topic" && (editing as TopicElement).level > 0 ? "#ffffff" : editing.fill,
       color: editing.type === "text" ? editing.stroke : editing.type === "topic" && (editing as TopicElement).level === 0 ? "#ffffff" : "#111827",
       borderRadius: editing.type === "topic" ? Math.min(editing.height / 2, 28) * s : undefined,
@@ -861,7 +935,10 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   // ── Render ───────────────────────────────────────────────────────────────
   const cursor = tool === "hand" || spaceDown ? (gesture?.kind === "pan" ? "grabbing" : "grab") : tool === "select" ? "default" : "crosshair";
   const s = camera.scale;
-  const gridSize = 24 * s;
+  // Grid dots shrink with the zoom, and the spacing doubles when they'd get too dense.
+  let gridSize = 24 * s;
+  while (gridSize < 14) gridSize *= 2;
+  const dotR = Math.max(0.45, Math.min(1.3, 1.1 * Math.sqrt(s)));
   const peerSel = peers.flatMap((p) => (p.selection ?? []).map((id) => ({ id, color: p.color })));
 
   return (
@@ -872,11 +949,11 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         cursor,
         touchAction: "none",
         backgroundColor: "#f8fafc",
-        backgroundImage: s > 0.25 ? "radial-gradient(#cbd5e1 1px, transparent 1px)" : undefined,
+        backgroundImage: s > 0.06 ? `radial-gradient(circle, #cbd5e1 ${dotR}px, transparent ${dotR + 0.5}px)` : undefined,
         backgroundSize: `${gridSize}px ${gridSize}px`,
         backgroundPosition: `${camera.x}px ${camera.y}px`,
       }}
-      onPointerLeave={() => api.setCursor(null)}
+      onPointerLeave={() => { api.setCursor(null); setGhostPt(null); setHoverId(null); }}
       onMouseDown={(e) => {
         // Clicking the canvas must not move focus to <body>: that would blur a text editor
         // the click just opened. Release focus from any other field so shortcuts keep working.
@@ -898,7 +975,6 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onDblClick={() => { if (gesture?.kind === "area") finishArea(); }}
         onContextMenu={(e) => e.evt.preventDefault()}
       >
         <Layer>
@@ -908,19 +984,21 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
               const { points: pts, bezier } = connectorPath(c, byId);
               const sel = selection.includes(c.id);
               return (
-                <Arrow key={c.id} id={c.id} name="connector" points={pts} bezier={bezier} lineJoin="round" stroke={sel ? "#0f8573" : c.stroke} fill={sel ? "#0f8573" : c.stroke}
+                <Arrow key={c.id} id={c.id} name="connector" points={pts} bezier={bezier} lineJoin="round"
+                  dash={c.pattern === "dashed" ? [10, 7] : c.pattern === "dotted" ? [0.1, 6] : undefined} stroke={sel ? "#0f8573" : c.stroke} fill={sel ? "#0f8573" : c.stroke}
                   strokeWidth={2} hitStrokeWidth={16} pointerLength={12} pointerWidth={12}
                   pointerAtBeginning={c.arrowStart} pointerAtEnding={c.arrowEnd} lineCap="round" />
               );
             }
             return (
-              <ElementNode key={el.id} el={el} measure={measureLabel(el)} zoom={s} editingCell={editingId === el.id ? editingCell : null} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
+              <ElementNode key={el.id} el={el} showAuthor={props.showAuthors} measure={measureLabel(el)} zoom={s} editingCell={editingId === el.id ? editingCell : null} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
                 draggable={canEdit && tool === "select" && !spaceDown && !el.locked && editingId !== el.id && !onVote && !presenting}
                 hidden={hiddenIds?.has(el.id) ?? false}
                 onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onTransformEnd={onTransformEnd} onDblClick={startEdit} />
             );
           })}
-          <Transformer ref={trRef} rotateEnabled flipEnabled={false} anchorSize={9} borderStroke="#0f8573" anchorStroke="#0f8573" anchorCornerRadius={2}
+          <Transformer ref={trRef} rotateEnabled flipEnabled={false}
+            rotationSnaps={shiftHeld ? [0, 45, 90, 135, 180, 225, 270, 315] : [0, 90, 180, 270]} rotationSnapTolerance={shiftHeld ? 22.5 : 4} anchorSize={9} borderStroke="#0f8573" anchorStroke="#0f8573" anchorCornerRadius={2}
             ignoreStroke boundBoxFunc={(o, n) => (n.width < 10 || n.height < 10 ? o : n)} />
         </Layer>
         <Layer listening={false}>
@@ -971,7 +1049,16 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
                 fontSize={13 / s} fill="#111827" fontStyle="600" />
             </>
           )}
-          {gesture?.kind === "area" && (
+          {gesture?.kind === "area" && gesture.wall && (
+            <>
+              <Line points={[...gesture.points, gesture.cx, gesture.cy]} stroke="#374151" opacity={0.75} lineJoin="miter" lineCap="square"
+                strokeWidth={(() => { const k = metersPerPxAt(elements, { x: gesture.cx, y: gesture.cy }, boardScale); return k ? 0.2 / k : 10; })()} />
+              <Circle x={gesture.points[0]} y={gesture.points[1]} radius={5 / s} fill="#0f766e" />
+              <KText x={gesture.cx + 12 / s} y={gesture.cy + 12 / s} fontSize={12 / s} fill="#374151"
+                text={livePreview(gesture.points[gesture.points.length - 2], gesture.points[gesture.points.length - 1], gesture.cx, gesture.cy) + "\nClick for corners. Double-click or Enter to finish, click the first point to close"} />
+            </>
+          )}
+          {gesture?.kind === "area" && !gesture.wall && (
             <>
               <Line points={[...gesture.points, gesture.cx, gesture.cy]} closed fill="rgba(20,163,139,0.12)" stroke="#0f766e" strokeWidth={1.5 / s} dash={[6 / s, 4 / s]} />
               <Circle x={gesture.points[0]} y={gesture.points[1]} radius={5 / s} fill="#0f766e" />
@@ -979,9 +1066,32 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
                 text={gesture.points.length >= 4 ? "Double-click, press Enter or click the first point to finish" : "Click to add corners"} />
             </>
           )}
-          {tool === "connector" && gesture?.kind === "connector" && (() => {
-            const hit = hitElement(elements, { x: gesture.x1, y: gesture.y1 }, gesture.fromId);
-            return hit ? <Rect {...bounds(hit)} stroke="#14a38b" strokeWidth={2 / s} cornerRadius={6} /> : null;
+          {ghostFor && ghostPt && !gesture && (
+            <Group x={ghostPt.x} y={ghostPt.y} opacity={0.55} listening={false}>
+              <ElementNode el={ghostFor} draggable={false} editing={false} selected={false} zoom={s}
+                onDragStart={() => {}} onDragMove={() => {}} onDragEnd={() => {}} onTransformEnd={() => {}} onDblClick={() => {}} />
+            </Group>
+          )}
+          {tool === "connector" && (() => {
+            // Connection points: on the element under the pointer, and on the one a new connector starts from.
+            const ids = new Set<string>();
+            if (hoverId) ids.add(hoverId);
+            if (gesture?.kind === "connector" && gesture.fromId) ids.add(gesture.fromId);
+            return [...ids].map((id) => {
+              const el = byId.get(id);
+              if (!el) return null;
+              const b = bounds(el);
+              const target = gesture?.kind === "connector" && id === hoverId;
+              const pts = [[b.x + b.width / 2, b.y], [b.x + b.width, b.y + b.height / 2], [b.x + b.width / 2, b.y + b.height], [b.x, b.y + b.height / 2]];
+              return (
+                <Group key={id} listening={false}>
+                  <Rect {...b} stroke="#14a38b" strokeWidth={(target ? 2 : 1.25) / s} dash={target ? undefined : [5 / s, 4 / s]} cornerRadius={6 / s} />
+                  {pts.map(([x, y], i) => (
+                    <Circle key={i} x={x} y={y} radius={(target ? 6 : 5) / s} fill={target ? "#14a38b" : "#ffffff"} stroke="#0f8573" strokeWidth={1.5 / s} />
+                  ))}
+                </Group>
+              );
+            });
           })()}
         </Layer>
       </Stage>

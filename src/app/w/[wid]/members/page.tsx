@@ -3,6 +3,7 @@ import { atLeast } from "@/lib/permissions";
 import { loadWorkspace } from "@/lib/workspace";
 import { changeMemberRole, removeMember, revokeInvite } from "@/app/actions/workspace";
 import { Avatar } from "@/components/Avatar";
+import { avatarUrl } from "@/lib/avatar";
 import { InviteForm } from "@/components/InviteForm";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { AutoSubmitSelect } from "@/components/AutoSubmitSelect";
@@ -21,7 +22,7 @@ export default async function MembersPage({ params }: { params: Promise<{ wid: s
   const isAdmin = atLeast(role, "ADMIN");
   const members = await db.workspaceMember.findMany({
     where: { workspaceId: wid },
-    include: { user: { select: { id: true, name: true, email: true, color: true } } },
+    include: { user: { select: { id: true, name: true, email: true, color: true, avatarVersion: true } } },
     orderBy: { createdAt: "asc" },
   });
   const invites = isAdmin
@@ -50,7 +51,7 @@ export default async function MembersPage({ params }: { params: Promise<{ wid: s
           const editable = isAdmin && !self && (m.role !== "OWNER" || role === "OWNER");
           return (
             <div key={m.id} className="flex flex-wrap items-center gap-3 p-4">
-              <Avatar name={m.user.name} color={m.user.color} />
+              <Avatar name={m.user.name} color={m.user.color} src={avatarUrl(m.user)} />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{m.user.name} {self && <span className="text-xs text-slate-400">(you)</span>}</div>
                 <div className="truncate text-sm text-slate-500">{m.user.email}</div>

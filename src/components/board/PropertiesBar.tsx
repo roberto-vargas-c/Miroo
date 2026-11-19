@@ -1,17 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight, Scale, FlipHorizontal2, FlipVertical2, Crop } from "lucide-react";
-import { STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement, type ConnectorStyle, type CardElement, type ImageElement, type TableElement } from "@/lib/board/types";
+import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight, Scale, FlipHorizontal2, FlipVertical2, Crop, AlignLeft, AlignCenter, AlignRight,
+  AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal,
+  AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter } from "lucide-react";
+import { FONTS, STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement, type ConnectorStyle, type CardElement, type ImageElement, type TableElement } from "@/lib/board/types";
 import { ColorWheel } from "./ColorWheel";
+import { QUALITIES, type Quality } from "./imageQuality";
 import { CARD_STATUS } from "./ElementNode";
 import type { BoardApi } from "./useBoard";
 
 export function PropertiesBar({
-  selected, all, api, onDuplicate, onDelete, onSetScale, onCrop, members = [],
+  selected, all, api, onDuplicate, onDelete, onSetScale, onCrop, onQuality, members = [],
 }: {
   selected: BoardElement[]; all: BoardElement[]; api: BoardApi; onDuplicate: () => void; onDelete: () => void; onSetScale?: () => void;
   onCrop?: (el: ImageElement) => void;
+  onQuality?: (q: Quality) => void;
   members?: { id: string; name: string; color: string }[];
 }) {
   const [wheelFor, setWheelFor] = useState<"fill" | "stroke" | null>(null);
@@ -50,9 +54,46 @@ export function PropertiesBar({
   };
   const STROKES = ["#111827", "#dc2626", "#0f8573", "#2563eb", "#db2777", "#ea580c"];
   const images = selected.filter((s): s is ImageElement => s.type === "image");
+  // Align / distribute: works on the selection's bounding box; connectors follow their ends.
+  const movable = selected.filter((e) => e.type !== "connector" && !e.locked);
+  const align = (mode: "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom") => {
+    const x1 = Math.min(...movable.map((e) => e.x)), x2 = Math.max(...movable.map((e) => e.x + e.width));
+    const y1 = Math.min(...movable.map((e) => e.y)), y2 = Math.max(...movable.map((e) => e.y + e.height));
+    api.updateMany(movable.map((e) => ({
+      id: e.id,
+      patch: mode === "left" ? { x: x1 } : mode === "right" ? { x: x2 - e.width } : mode === "hcenter" ? { x: (x1 + x2) / 2 - e.width / 2 }
+        : mode === "top" ? { y: y1 } : mode === "bottom" ? { y: y2 - e.height } : { y: (y1 + y2) / 2 - e.height / 2 },
+    })));
+  };
+  const distribute = (axis: "x" | "y") => {
+    const size = axis === "x" ? "width" : "height";
+    const sorted = [...movable].sort((a, b) => a[axis] + a[size] / 2 - (b[axis] + b[size] / 2));
+    const first = sorted[0], last = sorted[sorted.length - 1];
+    const span = last[axis] + last[size] - first[axis];
+    const gap = (span - sorted.reduce((t, e) => t + e[size], 0)) / (sorted.length - 1);
+    let pos = first[axis];
+    api.updateMany(sorted.map((e) => { const patch = { [axis]: pos }; pos += e[size] + gap; return { id: e.id, patch }; }));
+  };
 
   return (
     <div className="absolute left-1/2 top-16 z-10 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-lg">
+      {movable.length >= 2 && (
+        <>
+          <div className="flex items-center gap-0.5" title="Align">
+            {([["left", AlignStartVertical, "Align left"], ["hcenter", AlignCenterVertical, "Align centers horizontally"], ["right", AlignEndVertical, "Align right"],
+              ["top", AlignStartHorizontal, "Align top"], ["vcenter", AlignCenterHorizontal, "Align middles vertically"], ["bottom", AlignEndHorizontal, "Align bottom"]] as const).map(([m, Icon, label]) => (
+              <button key={m} title={label} onClick={() => align(m)} className="rounded-md p-1.5 hover:bg-slate-100"><Icon size={16} /></button>
+            ))}
+            {movable.length >= 3 && (
+              <>
+                <button title="Distribute horizontally" onClick={() => distribute("x")} className="rounded-md p-1.5 hover:bg-slate-100"><AlignHorizontalDistributeCenter size={16} /></button>
+                <button title="Distribute vertically" onClick={() => distribute("y")} className="rounded-md p-1.5 hover:bg-slate-100"><AlignVerticalDistributeCenter size={16} /></button>
+              </>
+            )}
+          </div>
+          <div className="h-6 w-px bg-slate-200" />
+        </>
+      )}
       {showFill && (
         <div className="flex items-center gap-1" title="Fill">
           {fillColors.map((c) => sw(c, first.fill === c, () => setAll({ fill: c })))}
@@ -75,6 +116,18 @@ export function PropertiesBar({
             onChange={(e) => setAll({ fontSize: Number(e.target.value) })} title="Font size">
             {[12, 14, 16, 18, 24, 32, 48, 64].map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+          <select className="rounded-md border border-slate-200 px-1 py-0.5 text-sm" value={first.font ?? "sans"} title="Font"
+            onChange={(e) => setAll({ font: e.target.value })}>
+            {FONTS.map((f) => <option key={f.id} value={f.id} style={{ fontFamily: f.family }}>{f.name}</option>)}
+          </select>
+          <div className="flex items-center gap-0.5">
+            {([["left", AlignLeft], ["center", AlignCenter], ["right", AlignRight]] as const).map(([a, Icon]) => (
+              <button key={a} title={`Align text ${a}`} onClick={() => setAll({ align: a })}
+                className={`rounded-md p-1.5 ${(first.align ?? (first.type === "text" ? "left" : "center")) === a ? "bg-brand-50 text-brand-700" : "hover:bg-slate-100"}`}>
+                <Icon size={15} />
+              </button>
+            ))}
+          </div>
         </>
       )}
       {only("card") && selected.length === 1 && (() => {
@@ -126,12 +179,29 @@ export function PropertiesBar({
           ))}
         </div>
       )}
+      {only("connector") && (
+        <div className="flex items-center gap-0.5">
+          {([["solid", "Solid line", undefined], ["dashed", "Dashed line", "5 4"], ["dotted", "Dotted line", "0.1 4"]] as const).map(([id, label, dash]) => (
+            <button key={id} title={label} onClick={() => setAll({ pattern: id } as Partial<BoardElement>)}
+              className={`rounded-md p-1 ${((first as ConnectorElement).pattern ?? "solid") === id ? "bg-brand-50 text-brand-700 ring-1 ring-brand-500" : "hover:bg-slate-100"}`}>
+              <svg width="20" height="18" viewBox="0 0 22 18"><path d="M3 9 H19" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeDasharray={dash} /></svg>
+            </button>
+          ))}
+        </div>
+      )}
       {images.length > 0 && images.length === selected.length && (
         <div className="flex items-center gap-0.5">
           <button className="rounded-md p-1.5 hover:bg-slate-100" title="Mirror horizontally"
             onClick={() => api.updateMany(images.map((i) => ({ id: i.id, patch: { flipX: !i.flipX } as Partial<BoardElement> })))}><FlipHorizontal2 size={16} /></button>
           <button className="rounded-md p-1.5 hover:bg-slate-100" title="Mirror vertically"
             onClick={() => api.updateMany(images.map((i) => ({ id: i.id, patch: { flipY: !i.flipY } as Partial<BoardElement> })))}><FlipVertical2 size={16} /></button>
+          {onQuality && (
+            <select className="rounded-md border border-slate-200 px-1 py-0.5 text-sm" title="Image quality: makes the selected pictures smaller; new uploads use it too"
+              value="" onChange={(e) => { if (e.target.value) onQuality(e.target.value as Quality); }}>
+              <option value="">Quality…</option>
+              {QUALITIES.map((q) => <option key={q.id} value={q.id}>{q.label}</option>)}
+            </select>
+          )}
           {images.length === 1 && onCrop && (
             <button className="rounded-md p-1.5 hover:bg-slate-100" title="Crop" onClick={() => onCrop(images[0])}><Crop size={16} /></button>
           )}

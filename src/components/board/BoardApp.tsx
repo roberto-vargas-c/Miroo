@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse } from "lucide-react";
-import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle } from "@/lib/board/types";
+import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle, type DocElement, docFragment } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
 import { unionRect, bounds as elBounds } from "./geometry";
@@ -13,13 +13,16 @@ import { ScaleDialog } from "./ScaleDialog";
 import { renameBoard } from "@/app/actions/workspace";
 import { LogoMark } from "@/components/Logo";
 import { Avatar } from "@/components/Avatar";
+import * as Y from "yjs";
 import { useBoard, type Viewport, type PrivateMode } from "./useBoard";
 import { TimerWidget, VotePanel, PrivateModeButton, ReactionPicker, tallyVotes, type FloatingReaction } from "./Facilitation";
 import type { CanvasHandle, Tool, WheelMode } from "./Canvas";
 import type { Camera } from "./geometry";
 import { Toolbar } from "./Toolbar";
 import { PenPalette } from "./PenPalette";
+import { getQuality, setQuality, reduceImage, pdfSideFor, type Quality } from "./imageQuality";
 import { CropDialog, applyCrop } from "./CropDialog";
+const DocPanel = dynamic(() => import("./DocPanel").then((m) => m.DocPanel), { ssr: false });
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
 import { ShareDialog, type Sharing } from "./ShareDialog";
@@ -48,7 +51,7 @@ export type BoardAppProps = {
 };
 
 export function BoardApp(p: BoardAppProps) {
-  const { elements: liveElements, peers, status, synced, me, api: rawApi, session, votes } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
+  const { elements: liveElements, peers, status, synced, me, api: rawApi, session, votes, doc: ydoc } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
   // Version history preview: show a saved version read-only instead of the live board.
   const [preview, setPreview] = useState<{ id: string; label: string; elements: BoardElement[] } | null>(null);
   const elements = preview?.elements ?? liveElements;
@@ -69,6 +72,8 @@ export function BoardApp(p: BoardAppProps) {
   const [showResolved, setShowResolved] = useState(false);
   const [penColor, setPenColor] = useState("#111827");
   const [penWidth, setPenWidth] = useState(3);
+  const [showAuthors, setShowAuthors] = useState(false);
+  useEffect(() => { try { setShowAuthors(localStorage.getItem("schema.showAuthors") === "1"); } catch { /* ignore */ } }, []);
   const [wheelMode, setWheelMode] = useState<WheelMode>("auto");
   useEffect(() => { try { const m = localStorage.getItem("schema.wheelMode"); if (m === "zoom" || m === "pan" || m === "auto") setWheelMode(m); } catch { /* ignore */ } }, []);
   const cycleWheelMode = () => {
@@ -389,6 +394,30 @@ export function BoardApp(p: BoardAppProps) {
   const [viewing, setViewing] = useState<EmbedElement | null>(null);
   const [playingVideo, setPlayingVideo] = useState<VideoElement | null>(null);
   const [cropping, setCropping] = useState<string | null>(null);
+  /** Re-encodes the selected pictures at a lower quality (and makes it the default for new uploads). */
+  const reduceSelectedImages = async (q: Quality) => {
+    setQuality(q);
+    const imgs = selected.filter((e): e is ImageElement => e.type === "image" && !(e as ImageElement).animated);
+    if (q === "original" || !imgs.length) { setToast(`New uploads: ${q === "original" ? "original quality" : q + " quality"}`); return; }
+    let saved = 0;
+    try {
+      for (const [i, im] of imgs.entries()) {
+        setImporting(`Reducing ${i + 1}/${imgs.length}…`);
+        const blob = await (await fetch(im.src)).blob();
+        const small = await reduceImage(blob, q);
+        if (small === blob) continue;
+        const url = await uploadBlob(small, "image");
+        api.update(im.id, { src: url } as Partial<BoardElement>);
+        saved += blob.size - small.size;
+      }
+      setToast(saved ? `Saved ${(saved / 1024 / 1024).toFixed(1)} MB. New uploads use this quality too.` : "Already at this size or smaller. New uploads use this quality too.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't reduce the images");
+    } finally { setImporting(null); }
+  };
+  const [openDoc, setOpenDoc] = useState<string | null>(null);
+  const openDocEl = openDoc ? (elements.find((e) => e.id === openDoc && e.type === "doc") as DocElement | undefined) : undefined;
+  const addDoc = () => { setPlacing(makeElement("doc", -130, -160)); setTool("select"); };
   const croppingEl = cropping ? (elements.find((e) => e.id === cropping) as ImageElement | undefined) : undefined;
   const addEmbed = useCallback(async (rawUrl: string, at?: { x: number; y: number }) => {
     let url = rawUrl.trim();
@@ -411,7 +440,7 @@ export function BoardApp(p: BoardAppProps) {
     if (!canEdit) return;
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
-      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
+      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (looksLikeUrl(text)) { e.preventDefault(); addEmbed(text); }
     };
@@ -439,7 +468,7 @@ export function BoardApp(p: BoardAppProps) {
           if (kind === "pdf") {
             setImporting(`Reading PDF${tag}…`);
             const { renderPdf } = await import("./pdfImport");
-            const pages = await renderPdf(f, (d, t) => setImporting(`Rendering page ${d}/${t}${tag}…`));
+            const pages = await renderPdf(f, (d, t) => setImporting(`Rendering page ${d}/${t}${tag}…`), pdfSideFor(getQuality()));
             const name = f.name.replace(/\.[^.]+$/, "");
             const els: BoardElement[] = [];
             let x = 0;
@@ -466,7 +495,7 @@ export function BoardApp(p: BoardAppProps) {
             items.push([el]);
           } else {
             setImporting(`Uploading image${tag}…`);
-            const url = await uploadBlob(f, f.name);
+            const url = await uploadBlob(await reduceImage(f, getQuality()), f.name);
             const img = new window.Image();
             await new Promise((r, j) => { img.onload = r; img.onerror = j; img.src = url; });
             const k = Math.min(1, 480 / Math.max(img.width, img.height));
@@ -523,33 +552,47 @@ export function BoardApp(p: BoardAppProps) {
   const [stickersOpen, setStickersOpen] = useState(false);
   const gifInputRef = useRef<HTMLInputElement>(null);
   const boardGifs = useMemo(() => Array.from(new Set(elements.filter((e) => e.type === "image" && (e as ImageElement).animated).map((e) => (e as ImageElement).src))), [elements]);
-  const addSticker = useCallback(async (pk: StickerPick, at?: { x: number; y: number }) => {
-    const c = at ?? canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
-    // A little random offset so repeated clicks don't stack exactly.
-    const j = at ? 0 : (Math.random() - 0.5) * 140;
-    let el: BoardElement;
+  /** Element to add for a sticker, emoji or GIF, centered on (0, 0). */
+  const stickerTemplate = useCallback(async (pk: StickerPick): Promise<BoardElement> => {
     if (pk.kind === "gif") {
       const img = new window.Image();
       await new Promise((r) => { img.onload = r; img.onerror = r; img.src = pk.id; });
       const k = Math.min(1, 320 / Math.max(img.width || 320, img.height || 320));
       const w = (img.width || 320) * k, h = (img.height || 320) * k;
-      el = makeElement("image", c.x - w / 2 + j, c.y - h / 2 + j, { width: w, height: h, fill: "transparent", stroke: "transparent" });
-      Object.assign(el, { src: pk.id, animated: true });
-    } else {
-      const size = pk.kind === "emoji" ? 120 : 180;
-      el = makeElement("sticker", c.x - size / 2 + j, c.y - size / 2 + j, { width: size, height: pk.kind === "emoji" ? size : size * (228 / 224), fill: "transparent", stroke: "transparent" });
-      Object.assign(el as StickerElement, pk.kind === "emoji" ? { emoji: pk.id } : { sticker: pk.id });
+      const el = makeElement("image", -w / 2, -h / 2, { width: w, height: h, fill: "transparent", stroke: "transparent" });
+      return Object.assign(el, { src: pk.id, animated: true });
     }
+    const size = pk.kind === "emoji" ? 120 : 180;
+    const h = pk.kind === "emoji" ? size : size * (228 / 224);
+    const el = makeElement("sticker", -size / 2, -h / 2, { width: size, height: h, fill: "transparent", stroke: "transparent" });
+    return Object.assign(el as StickerElement, pk.kind === "emoji" ? { emoji: pk.id } : { sticker: pk.id });
+  }, []);
+  /** Places a copy of a template element centered at a board point. */
+  const placeTemplate = useCallback((t: BoardElement, at: { x: number; y: number }) => {
+    const el = { ...t, id: makeElement(t.type, 0, 0).id, x: at.x - t.width / 2, y: at.y - t.height / 2, z: Date.now() } as BoardElement;
     api.add([el]);
     setSelection([el.id]);
+    return el;
   }, [api, setSelection]);
+  const addSticker = useCallback(async (pk: StickerPick, at?: { x: number; y: number }) => {
+    const c = at ?? canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    placeTemplate(await stickerTemplate(pk), c);
+  }, [placeTemplate, stickerTemplate]);
+  // Something picked from a menu follows the pointer as a ghost until a click puts it down (Esc cancels).
+  const [placing, setPlacing] = useState<BoardElement | null>(null);
+  const onPlace = (at: { x: number; y: number }) => {
+    if (!placing) return;
+    const el = placeTemplate(placing, at);
+    if (el.type === "doc") setOpenDoc(el.id);
+    setPlacing(null);
+  };
   const addImageFile = useCallback((f: File, at?: { x: number; y: number }) => addFiles([f], at), [addFiles]);
 
   useEffect(() => {
     if (!canEdit) return;
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
-      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
+      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
       const files = Array.from(e.clipboardData?.files ?? []);
       if (files.length) { e.preventDefault(); addFiles(files); }
     };
@@ -560,6 +603,11 @@ export function BoardApp(p: BoardAppProps) {
   const duplicateSelected = () => {
     const src = selected.filter((s) => s.type !== "connector");
     const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
+    // Documents keep their content outside the element, so copy it too.
+    ydoc.transact(() => src.forEach((s, i) => {
+      if (s.type !== "doc") return;
+      copyXml(ydoc.getXmlFragment(docFragment(s.id)), ydoc.getXmlFragment(docFragment(copies[i].id)));
+    }));
     api.add(copies);
     setSelection(copies.map((c) => c.id));
   };
@@ -732,6 +780,12 @@ export function BoardApp(p: BoardAppProps) {
         connectorStyle={connectorStyle}
         wheelMode={wheelMode}
         onOpenVideo={(el) => setPlayingVideo(el)}
+        onOpenDoc={(id) => setOpenDoc(id)}
+        placing={placing}
+        showAuthors={showAuthors}
+        onPlace={onPlace}
+        onCancelPlace={() => setPlacing(null)}
+        onCopyDoc={(from, to) => ydoc.transact(() => copyXml(ydoc.getXmlFragment(docFragment(from)), ydoc.getXmlFragment(docFragment(to))))}
         boardScale={session.boardScale}
         unit={unit}
         placingSymbol={placingSymbol}
@@ -803,12 +857,12 @@ export function BoardApp(p: BoardAppProps) {
         <div className="ml-auto flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
           <TimerWidget timer={session.timer} canEdit={canEdit} me={me?.name ?? ""} onChange={(t) => api.setSession("timer", t)} />
           <div className="flex -space-x-2">
-            {me && <Avatar name={`${me.name} (you)`} color={me.color} size={28} />}
+            {me && <Avatar name={`${me.name} (you)`} color={me.color} src={me.avatar} size={28} />}
             {dedupePeers(peers).slice(0, 5).map((x) => (
               <button key={x.clientId} title={following === x.clientId ? `Stop following ${x.name}` : `Follow ${x.name}`}
                 className={`rounded-full ${following === x.clientId ? "ring-2 ring-offset-1" : ""}`} style={{ ["--tw-ring-color" as string]: x.color }}
                 onClick={() => (following === x.clientId ? stopFollowing() : setFollowing(x.clientId))}>
-                <Avatar name={x.name} color={x.color} size={28} />
+                <Avatar name={x.name} color={x.color} src={x.avatar} size={28} />
               </button>
             ))}
             {peers.length > 5 && <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs ring-2 ring-white">+{peers.length - 5}</span>}
@@ -849,16 +903,17 @@ export function BoardApp(p: BoardAppProps) {
             </button>
           )}
           <BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onSaveTemplate={() => setDialog("template")}
-            canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0} />
+            canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0}
+            showAuthors={showAuthors} onToggleAuthors={() => setShowAuthors((v) => { try { localStorage.setItem("schema.showAuthors", v ? "0" : "1"); } catch { /* ignore */ } return !v; })} />
           {p.sharing && <button className="btn-primary py-1.5" onClick={() => setShareOpen(true)}><Share2 size={16} /> Share</button>}
         </div>
       </header>
 
       <Toolbar tool={tool} setTool={setTool} canEdit={canEdit} canComment={!!p.user} onImage={() => fileRef.current?.click()}
         onEmbed={() => setEmbedDialog("")} placingShape={placingShape} setPlacingShape={setPlacingShape}
-        stickersOpen={stickersOpen} onStickers={() => setStickersOpen((o) => !o)} />
+        stickersOpen={stickersOpen} onStickers={() => setStickersOpen((o) => !o)} onDoc={addDoc} />
       {canEdit && stickersOpen && (
-        <StickerPicker gifs={boardGifs} onPick={(pk) => addSticker(pk)} onUploadGif={() => gifInputRef.current?.click()} onClose={() => setStickersOpen(false)} />
+        <StickerPicker gifs={boardGifs} onPick={async (pk) => { setPlacing(await stickerTemplate(pk)); setTool("select"); }} onUploadGif={() => gifInputRef.current?.click()} onClose={() => setStickersOpen(false)} />
       )}
       <input ref={gifInputRef} type="file" multiple accept="image/gif" hidden
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = ""; }} />
@@ -896,6 +951,7 @@ export function BoardApp(p: BoardAppProps) {
         onSetScale={selectedPlan ? () => setScaleDialog({ lengthPx: null, plan: selectedPlan }) : undefined}
         members={p.members}
         onCrop={(el) => setCropping(el.id)}
+        onQuality={reduceSelectedImages}
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}
@@ -992,6 +1048,12 @@ export function BoardApp(p: BoardAppProps) {
           </form>
         </div>
       )}
+      {openDocEl && (
+        <DocPanel key={openDocEl.id} doc={ydoc} el={openDocEl} canEdit={canEdit} onClose={() => setOpenDoc(null)}
+          onUpdate={(patch) => api.update(openDocEl.id, patch as Partial<BoardElement>)}
+          onLocate={() => { const b = elBounds(openDocEl); if (canvasRef.current) flyTo(canvasRef.current.cameraFor(b, 200)); }}
+          uploadImage={(f) => uploadBlob(f, f.name)} />
+      )}
       {croppingEl && (
         <CropDialog el={croppingEl} onClose={() => setCropping(null)}
           onApply={(c) => { api.update(croppingEl.id, applyCrop(croppingEl, c) as Partial<BoardElement>); setCropping(null); }} />
@@ -1079,3 +1141,19 @@ const WHEEL_LABEL: Record<WheelMode, string> = {
   zoom: "always zooms",
   pan: "always scrolls (hold Ctrl or ⌘ to zoom)",
 };
+
+/** Deep-copies Yjs XML content (a document's body) into an empty, already attached parent. */
+function copyXml(from: Y.XmlFragment | Y.XmlElement, to: Y.XmlFragment | Y.XmlElement) {
+  from.toArray().forEach((node, i) => {
+    if (node instanceof Y.XmlText) {
+      const t = new Y.XmlText();
+      to.insert(i, [t]);
+      t.applyDelta(node.toDelta());
+    } else if (node instanceof Y.XmlElement) {
+      const el = new Y.XmlElement(node.nodeName);
+      to.insert(i, [el]);
+      for (const [k, v] of Object.entries(node.getAttributes())) el.setAttribute(k, v as string);
+      copyXml(node, el);
+    }
+  });
+}
