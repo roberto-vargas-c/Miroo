@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum TeamRole {
+  LEAD
+  MEMBER
+}
+
+enum BoardVisibility {
+  WORKSPACE // every workspace member
+  TEAM // only members of the board's team (plus workspace admins)
+  PRIVATE // only the creator (plus workspace admins)
+}
+
+enum LinkAccess {
+  NONE
+  VIEW
+  EDIT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  color        String   @default("#0ea5a4")
+  createdAt    DateTime @default(now())
+
+  memberships WorkspaceMember[]
+  teamMembers TeamMember[]
+  boards      Board[]           @relation("BoardCreator")
+  comments    Comment[]
+  invitesSent Invite[]          @relation("InviteSender")
+  stars       BoardStar[]
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  members WorkspaceMember[]
+  teams   Team[]
+  boards  Board[]
+  invites Invite[]
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+}
+
+model Team {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String   @default("")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members   TeamMember[]
+  boards    Board[]
+}
+
+model TeamMember {
+  id     String   @id @default(cuid())
+  teamId String
+  userId String
+  role   TeamRole @default(MEMBER)
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+}
+
+model Invite {
+  id          String        @id @default(cuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole @default(MEMBER)
+  token       String        @unique
+  invitedById String
+  acceptedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  expiresAt   DateTime
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation("InviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Board {
+  id          String          @id @default(cuid())
+  workspaceId String
+  teamId      String?
+  title       String
+  createdById String
+  visibility  BoardVisibility @default(WORKSPACE)
+  linkAccess  LinkAccess      @default(NONE)
+  shareToken  String          @unique
+  /// Encoded Yjs document state (the canvas contents)
+  content     Bytes?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team      Team?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  createdBy User        @relation("BoardCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  comments  Comment[]
+  assets    Asset[]
+  stars     BoardStar[]
+
+  @@index([workspaceId])
+}
+
+model BoardStar {
+  userId  String
+  boardId String
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@id([userId, boardId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  boardId   String
+  authorId  String
+  parentId  String?
+  x         Float
+  y         Float
+  body      String
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  board   Board     @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  author  User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent  Comment?  @relation("Replies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies Comment[] @relation("Replies")
+
+  @@index([boardId])
+}
+
+model Asset {
+  id        String   @id @default(cuid())
+  boardId   String
+  mimeType  String
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+}
