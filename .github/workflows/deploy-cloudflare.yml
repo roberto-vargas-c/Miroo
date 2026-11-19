@@ -31,12 +31,9 @@ jobs:
       - name: Check required secrets
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          HYPERDRIVE_ID: ${{ secrets.HYPERDRIVE_ID }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-          APP_URL: ${{ vars.APP_URL }}
         run: |
           missing=""
-          for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID DATABASE_URL HYPERDRIVE_ID AUTH_SECRET APP_URL; do
+          for n in CLOUDFLARE_API_TOKEN DATABASE_URL; do
             [ -n "${!n}" ] || missing="$missing $n"
           done
           if [ -n "$missing" ]; then echo "::error::Missing GitHub secrets or variables:$missing (see README, Deploying to Cloudflare)"; exit 1; fi
@@ -49,10 +46,11 @@ jobs:
         # Refuses changes that would delete data; those need a manual decision.
         run: npx prisma db push --skip-generate
 
-      - name: Point the Worker at this account's Hyperdrive
+      - name: Use another Hyperdrive, if one is set
         env:
           HYPERDRIVE_ID: ${{ secrets.HYPERDRIVE_ID }}
-        run: sed -i "s/00000000000000000000000000000000/${HYPERDRIVE_ID}/" wrangler.jsonc
+        run: |
+          [ -z "$HYPERDRIVE_ID" ] || sed -i -E "s/\"id\": \"[0-9a-f]{32}\"/\"id\": \"${HYPERDRIVE_ID}\"/" wrangler.jsonc
 
       - name: Build
         run: npm run cf:build
@@ -67,12 +65,17 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         # Secrets go up with the new version, so it never runs without them. Only the ones that are
-        # set are sent, through a JSON file rather than the command line.
+        # set are sent, through a JSON file rather than the command line. Without an AUTH_SECRET
+        # secret, the first deploy generates a random one on the Worker and later deploys keep it.
         run: |
+          has_auth=$(npx wrangler secret list --format json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).some(x=>x.name==="AUTH_SECRET")?1:0)}catch{console.log(0)}})')
           node -e '
             const keys = ["AUTH_SECRET","ANTHROPIC_API_KEY","RESEND_API_KEY","EMAIL_FROM","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET"];
             const out = Object.fromEntries(keys.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+            if (!out.AUTH_SECRET && process.argv[1] !== "1") out.AUTH_SECRET = require("crypto").randomBytes(32).toString("base64url");
             require("fs").writeFileSync(process.env.RUNNER_TEMP + "/worker-secrets.json", JSON.stringify(out));
-          '
-          npx wrangler deploy --secrets-file "$RUNNER_TEMP/worker-secrets.json" --var APP_URL:"$APP_URL"
+          ' "$has_auth"
+          args=(--secrets-file "$RUNNER_TEMP/worker-secrets.json")
+          [ -n "$APP_URL" ] && args+=(--var "APP_URL:$APP_URL")
+          npx wrangler deploy "${args[@]}"
           rm "$RUNNER_TEMP/worker-secrets.json"
