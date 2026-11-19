@@ -3,8 +3,9 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Download, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X } from "lucide-react";
-import { makeElement, type BoardElement, type ImageElement } from "@/lib/board/types";
+import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, Download, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X } from "lucide-react";
+import { makeElement, type BoardElement, type ImageElement, type EmbedElement } from "@/lib/board/types";
+import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
 import { unionRect, bounds as elBounds } from "./geometry";
 import { ArchToolbar } from "./ArchToolbar";
@@ -34,6 +35,8 @@ export type BoardAppProps = {
   sharing: Sharing | null;
   teams: { id: string; name: string }[];
   realtimeUrl: string;
+  /** Workspace members, for assigning task cards. */
+  members: { id: string; name: string; color: string }[];
 };
 
 export function BoardApp(p: BoardAppProps) {
@@ -354,6 +357,39 @@ export function BoardApp(p: BoardAppProps) {
     }
   };
 
+  // ── Shapes & embeds ──
+  const [placingShape, setPlacingShape] = useState("triangle");
+  const [embedDialog, setEmbedDialog] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<EmbedElement | null>(null);
+  const addEmbed = useCallback(async (rawUrl: string, at?: { x: number; y: number }) => {
+    let url = rawUrl.trim();
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+    try { new URL(url); } catch { setError("That doesn't look like a link"); return; }
+    const c = at ?? canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    const el = makeElement("embed", c.x - 180, c.y - 60) as EmbedElement;
+    el.url = url;
+    api.add([el]);
+    setSelection([el.id]);
+    try {
+      const r = await fetch(`/api/unfurl?url=${encodeURIComponent(url)}`);
+      if (r.ok) {
+        const m = await r.json();
+        api.update(el.id, { title: m.title ?? undefined, description: m.description ?? undefined, site: m.site ?? undefined } as Partial<BoardElement>);
+      }
+    } catch { /* keep the bare link */ }
+  }, [api, setSelection]);
+  useEffect(() => {
+    if (!canEdit) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const a = document.activeElement;
+      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (looksLikeUrl(text)) { e.preventDefault(); addEmbed(text); }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [canEdit, addEmbed]);
+
   // ── Images ──
   const q = p.shareToken ? `?share=${encodeURIComponent(p.shareToken)}` : "";
   const addImageFile = useCallback(async (file: File, at?: { x: number; y: number }) => {
@@ -450,6 +486,8 @@ export function BoardApp(p: BoardAppProps) {
         boardScale={session.boardScale}
         unit={unit}
         placingSymbol={placingSymbol}
+        placingShape={placingShape}
+        onOpenEmbed={(el) => { if (embedUrlFor(el.url)) setViewing(el); else window.open(el.url, "_blank", "noopener,noreferrer"); }}
         onCalibrate={(l) => setScaleDialog({ lengthPx: Math.hypot(l.x2 - l.x1, l.y2 - l.y1), plan: planAt({ x: (l.x1 + l.x2) / 2, y: (l.y1 + l.y2) / 2 }) })}
         onComment={(pt) => { setCommentDraft(pt); setCommentsOpen(true); setActiveComment(null); }}
         overlay={<>
@@ -554,7 +592,8 @@ export function BoardApp(p: BoardAppProps) {
         </div>
       </header>
 
-      <Toolbar tool={tool} setTool={setTool} canEdit={canEdit} canComment={!!p.user} onImage={() => fileRef.current?.click()} onUndo={api.undo} onRedo={api.redo} />
+      <Toolbar tool={tool} setTool={setTool} canEdit={canEdit} canComment={!!p.user} onImage={() => fileRef.current?.click()}
+        onEmbed={() => setEmbedDialog("")} placingShape={placingShape} setPlacingShape={setPlacingShape} />
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
         onChange={(e) => { const f = e.target.files?.[0]; if (f) addImageFile(f); e.target.value = ""; }} />
 
@@ -576,6 +615,7 @@ export function BoardApp(p: BoardAppProps) {
 
       {canEdit && <PropertiesBar selected={selected} all={elements} api={api} onDuplicate={duplicateSelected}
         onSetScale={selectedPlan ? () => setScaleDialog({ lengthPx: null, plan: selectedPlan }) : undefined}
+        members={p.members}
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}
@@ -586,6 +626,13 @@ export function BoardApp(p: BoardAppProps) {
         </button>
         <button className="btn-ghost p-1.5" title="Zoom in" onClick={() => canvasRef.current?.zoomBy(1.2)}><Plus size={16} /></button>
         <button className="btn-ghost p-1.5" title="Fit to content" onClick={() => canvasRef.current?.fitContent()}><Maximize size={16} /></button>
+        {canEdit && (
+          <>
+            <div className="mx-0.5 h-5 w-px bg-slate-200" />
+            <button className="btn-ghost p-1.5" title="Undo (Ctrl+Z)" onClick={api.undo}><Undo2 size={16} /></button>
+            <button className="btn-ghost p-1.5" title="Redo (Ctrl+Shift+Z)" onClick={api.redo}><Redo2 size={16} /></button>
+          </>
+        )}
       </div>
       </>}
 
@@ -610,6 +657,37 @@ export function BoardApp(p: BoardAppProps) {
           onClear={() => { if (vote) rawApi.clearVotes(vote.id); api.setSession("vote", null); }}
           onFocus={(el) => canvasRef.current && flyTo(canvasRef.current.cameraFor({ x: el.x, y: el.y, width: el.width, height: el.height }, 200))}
           onClose={() => setVoteOpen(false)} />
+      )}
+
+      {embedDialog !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => setEmbedDialog(null)}>
+          <form className="card w-full max-w-md space-y-3 p-5" onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => { e.preventDefault(); if (embedDialog.trim()) addEmbed(embedDialog); setEmbedDialog(null); }}>
+            <h2 className="text-lg font-semibold">Embed a link</h2>
+            <input autoFocus className="input" placeholder="https://… (YouTube, Vimeo, Figma, Loom or any web page)" value={embedDialog}
+              onChange={(e) => setEmbedDialog(e.target.value)} />
+            <p className="text-xs text-slate-500">Tip: you can also paste a link straight onto the board.</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-ghost" onClick={() => setEmbedDialog(null)}>Cancel</button>
+              <button className="btn-primary">Add</button>
+            </div>
+          </form>
+        </div>
+      )}
+      {viewing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4" onClick={() => setViewing(null)}>
+          <div className="w-full max-w-4xl space-y-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between text-white">
+              <span className="truncate font-medium">{viewing.title || viewing.url}</span>
+              <div className="flex gap-2">
+                <a className="btn-ghost text-white hover:bg-white/10" href={viewing.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} /> Open</a>
+                <button className="btn-ghost text-white hover:bg-white/10" onClick={() => setViewing(null)}><X size={16} /></button>
+              </div>
+            </div>
+            <iframe src={embedUrlFor(viewing.url) ?? undefined} className="aspect-video w-full rounded-lg bg-black" allow="autoplay; fullscreen; picture-in-picture"
+              allowFullScreen sandbox="allow-scripts allow-same-origin allow-popups allow-presentation" title={viewing.title || "Embedded content"} />
+          </div>
+        </div>
       )}
 
       {scaleDialog && (

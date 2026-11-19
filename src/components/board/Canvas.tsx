@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Stage, Layer, Rect, Arrow, Transformer, Line, Group, Circle, Text as KText } from "react-konva";
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
@@ -12,6 +12,9 @@ import {
   type PenElement,
   type MeasureElement,
   type SymbolElement,
+  type EmbedElement,
+  type TableElement,
+  type TopicElement,
   hasPoints,
 } from "@/lib/board/types";
 import { ElementNode } from "./ElementNode";
@@ -36,7 +39,9 @@ import {
 export type Tool =
   | "select" | "hand" | "sticky" | "text" | "rect" | "ellipse" | "diamond" | "connector" | "pen" | "frame" | "comment"
   // architecture
-  | "measure" | "area" | "wall" | "cloud" | "highlighter" | "calibrate" | "symbol";
+  | "measure" | "area" | "wall" | "cloud" | "highlighter" | "calibrate" | "symbol"
+  // content blocks
+  | "card" | "table" | "mindmap" | "shape";
 
 export type CanvasHandle = {
   zoomBy: (factor: number) => void;
@@ -66,6 +71,9 @@ type Props = {
   unit?: Unit;
   placingSymbol?: string | null;
   onCalibrate?: (line: { x1: number; y1: number; x2: number; y2: number }) => void;
+  /** Shape id for the "shape" tool (triangle, cylinder, …). */
+  placingShape?: string;
+  onOpenEmbed?: (el: EmbedElement) => void;
   onComment: (p: { x: number; y: number }) => void;
   overlay?: React.ReactNode;
   /** Called when the user pans or zooms by hand (stops following someone). */
@@ -78,8 +86,8 @@ type Props = {
   presenting?: boolean;
 };
 
-const SHAPE_TOOLS: Partial<Record<Tool, ElementType>> = { rect: "rect", ellipse: "ellipse", diamond: "diamond", frame: "frame" };
-const TEXT_TYPES = new Set<ElementType>(["sticky", "rect", "ellipse", "diamond", "text", "frame", "cloud"]);
+const SHAPE_TOOLS: Partial<Record<Tool, ElementType>> = { rect: "rect", ellipse: "ellipse", diamond: "diamond", frame: "frame", shape: "shape" };
+const TEXT_TYPES = new Set<ElementType>(["sticky", "rect", "ellipse", "diamond", "text", "frame", "cloud", "card", "topic", "shape"]);
 
 type Gesture =
   | { kind: "pan"; startX: number; startY: number; cam: Camera }
@@ -92,7 +100,8 @@ type Gesture =
 
 export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref) {
   const { elements, api, peers, canEdit, tool, setTool, selection, setSelection, camera, setCamera, penColor, onComment, overlay,
-    onManualCamera, onVote, badges, hiddenIds, presenting, boardScale = null, unit = "m", placingSymbol, onCalibrate } = props;
+    onManualCamera, onVote, badges, hiddenIds, presenting, boardScale = null, unit = "m", placingSymbol, onCalibrate,
+    placingShape = "triangle", onOpenEmbed } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -226,11 +235,16 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       const mod = e.metaKey || e.ctrlKey;
       if (e.code === "Space") { setSpaceDown(true); e.preventDefault(); return; }
       if (e.key === "Escape") { setGesture(null); setSelection([]); setTool("select"); return; }
-      if (e.key === "Enter") { finishAreaRef.current(); return; }
+      if (e.key === "Enter" && finishAreaRef.current()) return;
       if (mod && e.key.toLowerCase() === "a") { e.preventDefault(); setSelection(elements.map((x) => x.id)); return; }
       if (!canEdit) return;
       if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) api.redo(); else api.undo(); return; }
       if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); api.redo(); return; }
+      if ((e.key === "Tab" || e.key === "Enter") && selection.length === 1 && byId.get(selection[0])?.type === "topic") {
+        e.preventDefault();
+        addTopic(byId.get(selection[0]) as TopicElement, e.key === "Tab" ? "child" : "sibling");
+        return;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && selection.length) { e.preventDefault(); api.remove(selection); setSelection([]); return; }
       if (mod && e.key.toLowerCase() === "c") { clipboard.current = selection.map((id) => byId.get(id)!).filter(Boolean); return; }
       if (mod && (e.key.toLowerCase() === "v" || e.key.toLowerCase() === "d")) {
@@ -254,7 +268,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       if (mod || e.altKey) return;
       const shortcuts: Record<string, Tool> = {
         v: "select", h: "hand", n: "sticky", t: "text", r: "rect", o: "ellipse", l: "connector", p: "pen", f: "frame", c: "comment",
-        m: "measure", a: "area", w: "wall", k: "calibrate", q: "cloud", i: "highlighter",
+        m: "measure", a: "area", w: "wall", k: "calibrate", q: "cloud", i: "highlighter", g: "mindmap", d: "card",
       };
       const t = shortcuts[e.key.toLowerCase()];
       if (t) setTool(t);
@@ -313,8 +327,17 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       return;
     }
 
-    if (tool === "sticky" || tool === "text") {
-      const el = makeElement(tool, 0, 0);
+    if (tool === "table") {
+      const el = makeElement("table", 0, 0);
+      el.x = p.x - el.width / 2;
+      el.y = p.y - el.height / 2;
+      api.add([el]);
+      setSelection([el.id]);
+      setTool("select");
+      return;
+    }
+    if (tool === "sticky" || tool === "text" || tool === "card" || tool === "mindmap") {
+      const el = makeElement(tool === "mindmap" ? "topic" : tool, 0, 0);
       el.x = p.x - el.width / 2;
       el.y = p.y - el.height / 2;
       api.add([el]);
@@ -434,6 +457,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       Object.assign(el, r);
       if (g.type === "frame") el.z = minZ() - 1;
       if (g.type === "cloud") Object.assign(el, { fill: "transparent", stroke: "#dc2626", fontSize: 16, text: "" });
+      if (g.type === "shape") (el as { shape?: string }).shape = placingShape;
       api.add([el]);
       setSelection([el.id]);
       setTool("select");
@@ -464,9 +488,9 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     }
   };
 
-  function finishArea() {
+  function finishArea(): boolean {
     const g = gesture;
-    if (g?.kind !== "area") return;
+    if (g?.kind !== "area") return false;
     setGesture(null);
     // Drop near-duplicate points (a double-click adds the last point twice).
     const pts: number[] = [];
@@ -475,7 +499,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       if (n && Math.hypot(g.points[i] - pts[n - 2], g.points[i + 1] - pts[n - 1]) < 3 / camera.scale) continue;
       pts.push(g.points[i], g.points[i + 1]);
     }
-    if (pts.length < 6) return;
+    if (pts.length < 6) return true;
     const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
     const x = Math.min(...xs), y = Math.min(...ys);
     const el = makeElement("area", x, y, {
@@ -484,6 +508,40 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     }) as MeasureElement;
     el.points = pts.map((v, i) => (i % 2 === 0 ? v - x : v - y));
     api.add([el]);
+    return true;
+  }
+
+  /** Mind map: add a child (to the right) or a sibling (below) of a topic, connected to its parent. */
+  function addTopic(from: TopicElement, kind: "child" | "sibling") {
+    const parentOf = (t: BoardElement) => {
+      const c = elements.find((e) => e.type === "connector" && (e as ConnectorElement).to.id === t.id && byId.get((e as ConnectorElement).from.id ?? "")?.type === "topic");
+      return c ? (byId.get((c as ConnectorElement).from.id!) as TopicElement) : undefined;
+    };
+    const parent = kind === "child" ? from : parentOf(from);
+    if (!parent) { addTopic(from, "child"); return; }
+    const kids = elements.filter((e) => e.type === "connector" && (e as ConnectorElement).from.id === parent.id)
+      .map((c) => byId.get((c as ConnectorElement).to.id ?? ""))
+      .filter((k): k is BoardElement => !!k && k.type === "topic");
+    const level = parent.level + 1;
+    const palette = ["#0f8573", "#2563eb", "#7c3aed", "#db2777", "#ea580c", "#ca8a04"];
+    const color = level === 1 ? palette[kids.length % palette.length] : parent.stroke;
+    const last = kids.sort((a, b) => a.y - b.y).at(-1);
+    const h = 44;
+    const x = parent.x + parent.width + 80;
+    const y = last ? last.y + last.height + 18 : parent.y + parent.height / 2 - h / 2;
+    const el = makeElement("topic", x, y, { width: 170, height: h, fill: "#ffffff", stroke: color, text: "", fontSize: 15 }) as TopicElement;
+    el.root = parent.root;
+    el.level = level;
+    const c = makeElement("connector", 0, 0) as ConnectorElement;
+    Object.assign(c, {
+      width: 0, height: 0, stroke: color, arrowEnd: false, arrowStart: false,
+      from: { id: parent.id, x: parent.x + parent.width, y: parent.y + parent.height / 2 },
+      to: { id: el.id, x, y: y + h / 2 },
+    });
+    api.add([el, c]);
+    setSelection([el.id]);
+    setEditingCell(null);
+    setEditingId(el.id);
   }
 
   const finishAreaRef = useRef(finishArea);
@@ -573,22 +631,63 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   // ── Text editing ─────────────────────────────────────────────────────────
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState("");
+  const [editingCell, setEditingCell] = useState<[number, number] | null>(null);
   const startEdit = (id: string) => {
     const el = byId.get(id);
-    if (!canEdit || !el || !TEXT_TYPES.has(el.type) || hiddenIds?.has(id) || onVote) return;
+    if (!el) return;
+    if (el.type === "embed") { onOpenEmbed?.(el as EmbedElement); return; }
+    if (!canEdit || hiddenIds?.has(id) || onVote) return;
+    if (el.type === "table") {
+      const p = pointerWorld();
+      const t = el as TableElement;
+      if (!p || el.rotation) return;
+      const rows = t.cells.length, cols = t.cells[0]?.length ?? 1;
+      const r = Math.min(rows - 1, Math.max(0, Math.floor(((p.y - el.y) / el.height) * rows)));
+      const c = Math.min(cols - 1, Math.max(0, Math.floor(((p.x - el.x) / el.width) * cols)));
+      setEditingCell([r, c]);
+      setEditingId(id);
+      return;
+    }
+    if (!TEXT_TYPES.has(el.type)) return;
+    setEditingCell(null);
     setEditingId(id);
   };
-  useEffect(() => {
-    if (!editingId) return;
-    setDraft(byId.get(editingId)?.text ?? "");
-    requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.select(); });
+  // Load the draft and focus the editor synchronously, before the next keystroke is handled,
+  // so fast typing right after Tab/Enter/double-click lands in the right element or cell.
+  const editKey = editing ? `${editing.id}|${editingCell?.[0] ?? ""}|${editingCell?.[1] ?? ""}` : "";
+  const loadedKey = useRef("");
+  /** Text the editor should show before it is focused and selected; null when nothing is pending. */
+  const needsFocus = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!editKey || !editing) { loadedKey.current = ""; return; }
+    if (loadedKey.current === editKey) return;
+    loadedKey.current = editKey;
+    const text = editing.type === "table" && editingCell ? (editing as TableElement).cells[editingCell[0]]?.[editingCell[1]] ?? "" : editing.text ?? "";
+    setDraft(text);
+    needsFocus.current = text;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingId]);
+  }, [editKey]);
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (needsFocus.current === null || !ta || ta.value !== needsFocus.current) return;
+    needsFocus.current = null;
+    ta.focus();
+    ta.select();
+  });
 
   const commitEdit = () => {
     const el = editingId ? byId.get(editingId) : undefined;
     setEditingId(null);
     if (!el) return;
+    if (el.type === "table") {
+      const cell = editingCell;
+      setEditingCell(null);
+      if (!cell) return;
+      const cells = (el as TableElement).cells.map((row) => [...row]);
+      if (cells[cell[0]]) cells[cell[0]][cell[1]] = draft;
+      api.update(el.id, { cells } as Partial<BoardElement>);
+      return;
+    }
     const patch: Partial<BoardElement> = { text: draft };
     if (el.type === "text") {
       const ta = textareaRef.current;
@@ -601,6 +700,23 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const editorStyle = (): React.CSSProperties | undefined => {
     if (!editing) return undefined;
     const s = camera.scale;
+    if (editing.type === "table" && editingCell) {
+      const t = editing as TableElement;
+      const rows = t.cells.length, cols = t.cells[0]?.length ?? 1;
+      const rh = editing.height / rows, cw = editing.width / cols;
+      return {
+        position: "absolute", left: (editing.x + editingCell[1] * cw) * s + camera.x, top: (editing.y + editingCell[0] * rh) * s + camera.y,
+        width: cw * s, height: rh * s, padding: `${Math.max(0, (rh - (editing.fontSize ?? 14) * 1.3) / 2) * s}px ${8 * s}px`,
+        fontSize: (editing.fontSize ?? 14) * s, lineHeight: 1.3, background: "#ffffff", color: "#0f172a",
+      };
+    }
+    if (editing.type === "card") {
+      return {
+        position: "absolute", left: (editing.x + 14) * s + camera.x, top: (editing.y + 8) * s + camera.y,
+        width: (editing.width - 22) * s, height: (editing.height - 44) * s, padding: 4 * s,
+        fontSize: (editing.fontSize ?? 16) * s, fontWeight: 600, lineHeight: 1.25, background: "#ffffff", color: "#0f172a",
+      };
+    }
     const isFrame = editing.type === "frame";
     const pad = (editing.type === "sticky" ? 16 : editing.type === "text" ? 0 : 10) * s;
     return {
@@ -614,8 +730,9 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       fontSize: (isFrame ? 15 : editing.fontSize ?? 16) * s,
       lineHeight: 1.25,
       textAlign: editing.type === "text" || isFrame ? "left" : "center",
-      background: editing.type === "text" || isFrame ? "rgba(255,255,255,0.9)" : editing.fill,
-      color: editing.type === "text" ? editing.stroke : "#111827",
+      background: editing.type === "text" || isFrame ? "rgba(255,255,255,0.9)" : editing.type === "topic" && (editing as TopicElement).level > 0 ? "#ffffff" : editing.fill,
+      color: editing.type === "text" ? editing.stroke : editing.type === "topic" && (editing as TopicElement).level === 0 ? "#ffffff" : "#111827",
+      borderRadius: editing.type === "topic" ? Math.min(editing.height / 2, 28) * s : undefined,
       transform: `rotate(${editing.rotation}deg)`,
       transformOrigin: "top left",
     };
@@ -639,6 +756,14 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         backgroundPosition: `${camera.x}px ${camera.y}px`,
       }}
       onPointerLeave={() => api.setCursor(null)}
+      onMouseDown={(e) => {
+        // Clicking the canvas must not move focus to <body>: that would blur a text editor
+        // the click just opened. Release focus from any other field so shortcuts keep working.
+        if (!(e.target instanceof HTMLCanvasElement)) return;
+        e.preventDefault();
+        const active = document.activeElement as HTMLElement | null;
+        if (active && active !== textareaRef.current && active !== document.body) active.blur();
+      }}
     >
       <Stage
         ref={stageRef}
@@ -668,7 +793,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
               );
             }
             return (
-              <ElementNode key={el.id} el={el} measure={measureLabel(el)} zoom={s} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
+              <ElementNode key={el.id} el={el} measure={measureLabel(el)} zoom={s} editingCell={editingId === el.id ? editingCell : null} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
                 draggable={canEdit && tool === "select" && !spaceDown && !el.locked && editingId !== el.id && !onVote && !presenting}
                 hidden={hiddenIds?.has(el.id) ?? false}
                 onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onTransformEnd={onTransformEnd} onDblClick={startEdit} />
@@ -745,7 +870,21 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
           onBlur={commitEdit}
           onKeyDown={(e) => {
             e.stopPropagation();
-            if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey || editing.type === "frame"))) { e.preventDefault(); commitEdit(); }
+            if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey || editing.type === "frame" || editing.type === "topic" || editing.type === "table"))) {
+              e.preventDefault(); commitEdit();
+            }
+            if (e.key === "Tab" && editing.type === "table" && editingCell) {
+              e.preventDefault();
+              const t = editing as TableElement;
+              const cols = t.cells[0]?.length ?? 1, rows = t.cells.length;
+              let [r, c] = editingCell;
+              c += e.shiftKey ? -1 : 1;
+              if (c >= cols) { c = 0; r = (r + 1) % rows; }
+              if (c < 0) { c = cols - 1; r = (r - 1 + rows) % rows; }
+              commitEdit();
+              setEditingCell([r, c]);
+              setEditingId(editing.id);
+            }
           }}
           className="resize-none overflow-hidden rounded-sm border-2 border-brand-500 outline-none"
           style={editorStyle()}

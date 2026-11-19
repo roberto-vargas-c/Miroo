@@ -1,13 +1,15 @@
 "use client";
 
 import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight, Scale } from "lucide-react";
-import { STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement } from "@/lib/board/types";
+import { STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement, type CardElement, type TableElement } from "@/lib/board/types";
+import { CARD_STATUS } from "./ElementNode";
 import type { BoardApi } from "./useBoard";
 
 export function PropertiesBar({
-  selected, all, api, onDuplicate, onDelete, onSetScale,
+  selected, all, api, onDuplicate, onDelete, onSetScale, members = [],
 }: {
   selected: BoardElement[]; all: BoardElement[]; api: BoardApi; onDuplicate: () => void; onDelete: () => void; onSetScale?: () => void;
+  members?: { id: string; name: string; color: string }[];
 }) {
   if (!selected.length) return null;
   const types = new Set(selected.map((s) => s.type));
@@ -17,11 +19,11 @@ export function PropertiesBar({
   const front = () => { let z = Math.max(...zs); api.updateMany(selected.map((s) => ({ id: s.id, patch: { z: ++z } }))); };
   const back = () => { let z = Math.min(...zs); api.updateMany(selected.map((s) => ({ id: s.id, patch: { z: --z } }))); };
   const locked = selected.every((s) => s.locked);
-  const hasText = selected.some((s) => ["sticky", "rect", "ellipse", "diamond", "text"].includes(s.type));
+  const hasText = selected.some((s) => ["sticky", "rect", "ellipse", "diamond", "text", "card", "table", "topic", "shape"].includes(s.type));
 
   const fillColors = only("sticky") ? STICKY_COLORS : SHAPE_COLORS;
-  const showFill = selected.some((s) => ["sticky", "rect", "ellipse", "diamond", "frame", "wall"].includes(s.type));
-  const showStroke = selected.some((s) => ["rect", "ellipse", "diamond", "text", "pen", "connector", "dimension", "area", "cloud", "symbol"].includes(s.type));
+  const showFill = selected.some((s) => ["sticky", "rect", "ellipse", "diamond", "frame", "wall", "shape", "topic"].includes(s.type));
+  const showStroke = selected.some((s) => ["rect", "ellipse", "diamond", "text", "pen", "connector", "dimension", "area", "cloud", "symbol", "shape", "topic"].includes(s.type));
   const sw = (c: string, active: boolean, onClick: () => void) => (
     <button key={c} onClick={onClick} className={`h-6 w-6 rounded-full border ${active ? "ring-2 ring-brand-500 ring-offset-1" : "border-slate-300"}`} style={{ background: c }} title={c} />
   );
@@ -51,6 +53,45 @@ export function PropertiesBar({
           </select>
         </>
       )}
+      {only("card") && selected.length === 1 && (() => {
+        const c = first as CardElement;
+        return (
+          <>
+            <div className="h-6 w-px bg-slate-200" />
+            <select className="rounded-md border border-slate-200 px-1 py-0.5 text-sm" value={c.status} title="Status"
+              onChange={(e) => api.update(c.id, { status: e.target.value } as Partial<BoardElement>)}>
+              {Object.entries(CARD_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+            <select className="max-w-[9rem] rounded-md border border-slate-200 px-1 py-0.5 text-sm" value={c.assignee?.id ?? ""} title="Assignee"
+              onChange={(e) => {
+                const m = members.find((x) => x.id === e.target.value);
+                api.update(c.id, { assignee: m ? { id: m.id, name: m.name, color: m.color } : null } as Partial<BoardElement>);
+              }}>
+              <option value="">Unassigned</option>
+              {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+            <input type="date" className="rounded-md border border-slate-200 px-1 py-0.5 text-sm" value={c.due ?? ""} title="Due date"
+              onChange={(e) => api.update(c.id, { due: e.target.value || null } as Partial<BoardElement>)} />
+          </>
+        );
+      })()}
+      {only("table") && selected.length === 1 && (() => {
+        const t = first as TableElement;
+        const rows = t.cells.length, cols = t.cells[0]?.length ?? 1;
+        const set = (cells: string[][], extra: Partial<TableElement> = {}) => api.update(t.id, { cells, ...extra } as Partial<BoardElement>);
+        const b = "rounded-md px-1.5 py-1 text-xs hover:bg-slate-100 disabled:opacity-40";
+        return (
+          <>
+            <div className="h-6 w-px bg-slate-200" />
+            <button className={b} onClick={() => set([...t.cells, Array(cols).fill("")], { height: t.height + t.height / rows })}>+ Row</button>
+            <button className={b} disabled={rows <= 1} onClick={() => set(t.cells.slice(0, -1), { height: t.height - t.height / rows })}>− Row</button>
+            <button className={b} onClick={() => set(t.cells.map((r) => [...r, ""]), { width: t.width + t.width / cols })}>+ Col</button>
+            <button className={b} disabled={cols <= 1} onClick={() => set(t.cells.map((r) => r.slice(0, -1)), { width: t.width - t.width / cols })}>− Col</button>
+            <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={t.header}
+              onChange={(e) => api.update(t.id, { header: e.target.checked } as Partial<BoardElement>)} /> Header</label>
+          </>
+        );
+      })()}
       {only("connector") && (
         <button className="rounded-md p-1.5 hover:bg-slate-100" title="Arrow direction"
           onClick={() => {
