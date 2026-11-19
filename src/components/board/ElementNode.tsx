@@ -6,8 +6,9 @@ import { loadGif, type GifFrames } from "./gif";
 import { stickerUrl } from "@/lib/board/stickers";
 import { Group, Rect, Text, Ellipse, Line, Image as KImage, Path, Label as KLabel, Tag } from "react-konva";
 import type {
-  BoardElement, CardElement, EmbedElement, ImageElement, VideoElement, StickerElement, DocElement, MeasureElement, PenElement, ShapeElement, SymbolElement, TableElement, TopicElement,
+  BoardElement, CardElement, EmbedElement, ImageElement, VideoElement, StickerElement, DocElement, WallElement, MeasureElement, PenElement, ShapeElement, SymbolElement, TableElement, TopicElement,
 } from "@/lib/board/types";
+import { fontFamily } from "@/lib/board/types";
 import { SHAPE_BY_ID } from "@/lib/board/shapes";
 import { cloudPath, polygonCentroid, SYMBOL_BY_ID } from "@/lib/board/arch";
 
@@ -148,9 +149,9 @@ export function Label({ el, editing }: { el: BoardElement; editing: boolean }) {
       width={Math.max(1, el.width - pad * 2)}
       height={el.type === "text" ? undefined : Math.max(1, el.height - pad * 2)}
       fontSize={el.fontSize ?? 16}
-      fontFamily="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+      fontFamily={fontFamily(el.font)}
       fill={el.type === "text" ? el.stroke : textColorFor(el.fill)}
-      align={el.type === "text" ? "left" : "center"}
+      align={el.align ?? (el.type === "text" ? "left" : "center")}
       verticalAlign={el.type === "text" ? "top" : "middle"}
       lineHeight={1.25}
       wrap="word"
@@ -162,6 +163,8 @@ export function Label({ el, editing }: { el: BoardElement; editing: boolean }) {
 
 type Props = {
   el: BoardElement;
+  /** Show who created sticky notes. */
+  showAuthor?: boolean;
   /** Private mode: someone else's note, shown face-down. */
   hidden?: boolean;
   /** Measurement text for dimension / area elements. */
@@ -180,7 +183,7 @@ type Props = {
   onDblClick: (id: string) => void;
 };
 
-export function ElementNode({ el, hidden, measure, zoom = 1, editingCell, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
+export function ElementNode({ el, showAuthor, hidden, measure, zoom = 1, editingCell, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
   const common = {
     id: el.id,
     name: "element",
@@ -214,6 +217,10 @@ export function ElementNode({ el, hidden, measure, zoom = 1, editingCell, dragga
           <Rect width={el.width} height={el.height} fill={el.fill} cornerRadius={3}
             shadowColor="#0f172a" shadowOpacity={0.18} shadowBlur={12} shadowOffsetY={4} />
           <Label el={el} editing={editing} />
+          {showAuthor && el.author && (
+            <Text x={10} y={el.height - 20} width={el.width - 20} text={el.author.name} fontSize={11} fill={textColorFor(el.fill)}
+              opacity={0.65} ellipsis wrap="none" listening={false} fontFamily={fontFamily()} />
+          )}
         </Group>
       );
     case "rect":
@@ -337,12 +344,23 @@ export function ElementNode({ el, hidden, measure, zoom = 1, editingCell, dragga
         </Group>
       );
     }
-    case "wall":
+    case "wall": {
+      const w = el as WallElement;
+      if (w.points) {
+        const t = w.thickness ?? 10;
+        return (
+          <Group {...common}>
+            <Line points={w.points} closed={w.closed} stroke={el.stroke} strokeWidth={t + 2} lineJoin="miter" lineCap={w.closed ? "butt" : "square"} />
+            <Line points={w.points} closed={w.closed} stroke={el.fill} strokeWidth={t} lineJoin="miter" lineCap={w.closed ? "butt" : "square"} hitStrokeWidth={Math.max(t, 12)} />
+          </Group>
+        );
+      }
       return (
         <Group {...common}>
           <Rect width={el.width} height={el.height} fill={el.fill} stroke={el.stroke} strokeWidth={1} />
         </Group>
       );
+    }
     case "cloud":
       return (
         <Group {...common}>

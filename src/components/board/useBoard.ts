@@ -13,6 +13,7 @@ export type Peer = {
   userId?: string;
   name: string;
   color: string;
+  avatar?: string | null;
   cursor?: { x: number; y: number } | null;
   selection?: string[];
   viewport?: Viewport;
@@ -37,13 +38,14 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
   const [peers, setPeers] = useState<Peer[]>([]);
   const [status, setStatus] = useState<ConnStatus>("connecting");
   const [synced, setSynced] = useState(false);
-  const [me, setMe] = useState<{ id: string; name: string; color: string; canEdit: boolean } | null>(null);
+  const [me, setMe] = useState<{ id: string; name: string; color: string; avatar?: string | null; canEdit: boolean } | null>(null);
   const sessionMap = useMemo(() => doc.getMap<unknown>("session"), [doc]);
   // votes: key "<voteId>|<userId>" -> element ids that user voted for
   const votesMap = useMemo(() => doc.getMap<string[]>("votes"), [doc]);
   const [session, setSession] = useState<SessionState>({ timer: null, vote: null, privateMode: null, boardScale: null, unit: null });
   const [votes, setVotes] = useState<Map<string, string[]>>(new Map());
   const providerRef = useRef<WebsocketProvider | null>(null);
+  const meRef = useRef<{ id: string; name: string; color: string } | null>(null);
 
   useEffect(() => {
     const update = () => setElements(Array.from(map.values()).sort((a, b) => a.z - b.z));
@@ -74,14 +76,15 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
       const q = shareToken ? `?share=${encodeURIComponent(shareToken)}` : "";
       const res = await fetch(`/api/boards/${boardId}/realtime-token${q}`);
       if (!res.ok) { setStatus("denied"); return; }
-      const { token, id, name, color, canEdit } = await res.json();
+      const { token, id, name, color, avatar, canEdit } = await res.json();
       if (cancelled) return;
-      setMe({ id, name, color, canEdit });
+      setMe({ id, name, color, avatar, canEdit });
+      meRef.current = { id, name, color };
       // A path like "/realtime" means the same host as the page (Cloudflare deploys).
       const wsUrl = realtimeUrl.startsWith("/") ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${realtimeUrl}` : realtimeUrl;
       provider = new WebsocketProvider(wsUrl, boardId, doc, { params: { token } });
       providerRef.current = provider;
-      provider.awareness.setLocalStateField("user", { id, name, color });
+      provider.awareness.setLocalStateField("user", { id, name, color, avatar });
       provider.on("status", ({ status }: { status: string }) => setStatus(status as ConnStatus));
       provider.on("sync", (s: boolean) => s && setSynced(true));
       provider.on("connection-close", (ev: CloseEvent | null) => {
@@ -93,7 +96,7 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
         aw.getStates().forEach((s, clientId) => {
           if (clientId === doc.clientID || !s.user) return;
           list.push({
-            clientId, userId: s.user.id, name: s.user.name, color: s.user.color, cursor: s.cursor, selection: s.selection,
+            clientId, userId: s.user.id, name: s.user.name, color: s.user.color, avatar: s.user.avatar, cursor: s.cursor, selection: s.selection,
             viewport: s.viewport, reaction: s.reaction, summon: s.summon, presenting: s.presenting,
           });
         });
@@ -114,7 +117,11 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
   const api = useMemo(() => {
     const transact = (fn: () => void) => doc.transact(fn);
     return {
-      add(els: BoardElement[]) { transact(() => els.forEach((e) => map.set(e.id, e))); },
+      add(els: BoardElement[]) {
+        // Stamp the creator on new elements (copies of someone else's note keep the original author).
+        const a = meRef.current;
+        transact(() => els.forEach((e) => map.set(e.id, e.author || !a ? e : { ...e, author: { id: a.id, name: a.name, color: a.color } })));
+      },
       update(id: string, patch: Partial<BoardElement>) {
         const cur = map.get(id);
         if (cur) map.set(id, { ...cur, ...patch } as BoardElement);

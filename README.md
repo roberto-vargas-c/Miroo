@@ -8,14 +8,18 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 **Canvas**
 - Infinite canvas with pan (two-finger scroll, space+drag, hand tool, middle mouse) and zoom (mouse wheel, pinch on trackpads and iPad, zoom controls, fit to content). The wheel button next to the zoom controls switches the scroll wheel between auto, always zoom and always pan
 - Sticky notes, rectangles, ellipses, diamonds, free text, frames
-- Freehand pen and highlighter with 8 / 4 thicknesses, color swatches, a color wheel and an eyedropper (picks from anywhere on screen in Chrome and Edge, from the board elsewhere)
+- Freehand pen and highlighter with 8 / 4 thicknesses, color swatches, a color wheel and an eyedropper (picks from anywhere on screen in Chrome and Edge, from the board elsewhere). Hold Shift for a straight line
 - Drop, paste or upload many files at once: images, animated GIFs (they play on the board), PDFs (one image per page) and videos (MP4, WebM, MOV; play in place or full screen)
+- Image quality (Original, High 2560 px, Medium 1600 px, Low 1024 px): pick it on selected pictures or PDF pages to make them lighter; new uploads and PDF imports use the same setting
 - Images and PDF pages: mirror horizontally or vertically, crop (free or 1:1, 4:3, 16:9, 3:4)
 - Transparency for shapes, images, stickers and strokes
-- Stickers and emojis: a picker with original sticker packs (Feedback, Status, Celebrate, Studio), emojis, the board's GIFs and a Recent row; click or drag onto the board
-- Connectors/arrows that attach to shapes and follow them when moved: straight, curved or angled
-- Select, multi-select (shift-click, marquee), move, resize, rotate, lock, bring to front / send to back
-- Colors, font sizes, inline text editing (double-click)
+- Stickers and emojis: a picker with original sticker packs (Feedback, Status, Celebrate, Studio), emojis, the board's GIFs and a Recent row; click one to get a see-through preview that follows the pointer, then click where it goes (Esc cancels), or drag it onto the board. Sticky notes, text, cards, documents and symbols show the same preview before you place them
+- Connectors/arrows that attach to shapes and follow them when moved: straight, curved or angled; solid, dashed or dotted. With the connector tool, hovering a shape shows its connection points
+- Select, multi-select (shift-click, marquee), move, resize, rotate (hold Shift for 45° steps), lock, bring to front / send to back
+- Align several items (left, center, right, top, middle, bottom) and distribute them evenly
+- Colors, fonts (sans, serif, mono, rounded, handwritten, condensed), font sizes, text alignment, inline text editing (double-click)
+- Show authors: a board menu option that writes who added each sticky note on it
+- The background dot grid stays the same size on screen at any zoom
 - Undo/redo, copy/paste, duplicate, delete, arrow-key nudge, keyboard shortcuts for every tool
 - Moving a frame moves everything inside it
 - Export the board as PNG
@@ -44,7 +48,7 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Import plans: PDFs (every page becomes a locked sheet, rendered in the browser with pdf.js) or images
 - Set the scale per plan, either by drawing over a known dimension or, for PDFs, by entering the drawing scale (1:100…); or set one scale for the whole board
 - Measure lengths (dimension lines) and areas with perimeter, in m, cm, mm or ft-in; Shift snaps angles to 15°
-- Walls drawn at 20 cm thickness at plan scale
+- Walls drawn as a polyline at 20 cm thickness at plan scale: click each corner, double-click or Enter to finish, click the first corner to close a room. Shift snaps each segment to 15° steps
 - Redlining: revision clouds, highlighter, red line and text colors
 - Plan symbol library sized to real dimensions: doors, windows, stairs, columns, bathroom and kitchen fixtures, furniture, trees, cars, north arrow, section and level markers
 
@@ -74,6 +78,8 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 
 **Workspaces & teams**
 - Multiple workspaces per user, with a workspace switcher
+- Profile page: change your name and color, add or remove a profile picture (shown in the sidebar, member lists and on boards)
+- Install it as an app on phones and tablets (Install app in the sidebar; on iPhone and iPad it shows the Add to Home Screen steps)
 - Workspace roles: Owner, Admin, Member, Viewer
 - Invite links with a role, pending invite list, revoke
 - Teams inside a workspace, with leads and members

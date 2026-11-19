@@ -40,6 +40,10 @@ model User {
   /// Null for accounts that only sign in with Google or SSO
   passwordHash    String?
   color           String    @default("#0ea5a4")
+  /// Profile picture (small WebP/JPEG/PNG), served at /api/avatars/<id>?v=<avatarVersion>
+  avatar          Bytes?
+  avatarMime      String?
+  avatarVersion   Int       @default(0)
   emailVerifiedAt DateTime?
   /// Bumped to sign the user out everywhere (e.g. after a password reset)
   sessionVersion  Int       @default(0)

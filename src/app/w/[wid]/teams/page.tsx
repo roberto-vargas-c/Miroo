@@ -3,6 +3,7 @@ import { atLeast } from "@/lib/permissions";
 import { loadWorkspace } from "@/lib/workspace";
 import { addTeamMember, createTeam, deleteTeam, removeTeamMember } from "@/app/actions/workspace";
 import { Avatar } from "@/components/Avatar";
+import { avatarUrl } from "@/lib/avatar";
 import { ConfirmButton } from "@/components/ConfirmButton";
 
 export default async function TeamsPage({ params }: { params: Promise<{ wid: string }> }) {
@@ -12,7 +13,7 @@ export default async function TeamsPage({ params }: { params: Promise<{ wid: str
   const teams = await db.team.findMany({
     where: { workspaceId: wid },
     include: {
-      members: { include: { user: { select: { id: true, name: true, color: true, email: true } } } },
+      members: { include: { user: { select: { id: true, name: true, color: true, email: true, avatarVersion: true } } } },
       _count: { select: { boards: true } },
     },
     orderBy: { name: "asc" },
@@ -57,7 +58,7 @@ export default async function TeamsPage({ params }: { params: Promise<{ wid: str
             <ul className="mt-4 divide-y divide-slate-100">
               {t.members.map((m) => (
                 <li key={m.id} className="flex items-center gap-3 py-2">
-                  <Avatar name={m.user.name} color={m.user.color} size={28} />
+                  <Avatar name={m.user.name} color={m.user.color} src={avatarUrl(m.user)} size={28} />
                   <span className="flex-1 text-sm">{m.user.name} <span className="text-slate-400">{m.user.email}</span></span>
                   <span className="text-xs text-slate-500">{m.role === "LEAD" ? "lead" : "member"}</span>
                   {canManage && (

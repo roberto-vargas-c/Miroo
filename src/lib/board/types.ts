@@ -42,6 +42,12 @@ export interface BaseElement {
   locked?: boolean;
   /** 0–1; fully opaque when missing. */
   opacity?: number;
+  /** Font id from FONTS; the default sans-serif when missing. */
+  font?: string;
+  /** Text alignment; each type has its own default. */
+  align?: "left" | "center" | "right";
+  /** Who created it (shown on sticky notes when "Show authors" is on). */
+  author?: { id: string; name: string; color?: string };
   /** Set on elements created while private mode is on; others see them hidden until it ends. */
   privateOwner?: string;
 }
@@ -55,6 +61,8 @@ export interface ConnectorElement extends BaseElement {
   arrowStart: boolean;
   /** Line shape; straight when missing. */
   style?: ConnectorStyle;
+  /** Line pattern; solid when missing. */
+  pattern?: "solid" | "dashed" | "dotted";
 }
 
 export type ConnectorStyle = "straight" | "curved" | "elbow";
@@ -152,10 +160,19 @@ export interface EmbedElement extends BaseElement {
 
 export type BoardElement =
   | BaseElement | ConnectorElement | PenElement | ImageElement | MeasureElement | SymbolElement
-  | CardElement | TableElement | TopicElement | ShapeElement | EmbedElement | VideoElement | StickerElement | DocElement;
+  | CardElement | TableElement | TopicElement | ShapeElement | EmbedElement | VideoElement | StickerElement | DocElement | WallElement;
+
+/** Wall drawn as a polyline (older walls are plain rotated rectangles without points). */
+export interface WallElement extends BaseElement {
+  type: "wall";
+  points?: number[];
+  /** Wall thickness in board units. */
+  thickness?: number;
+  closed?: boolean;
+}
 
 export function hasPoints(el: BoardElement): el is PenElement | MeasureElement {
-  return el.type === "pen" || el.type === "dimension" || el.type === "area";
+  return el.type === "pen" || el.type === "dimension" || el.type === "area" || (el.type === "wall" && Array.isArray((el as WallElement).points));
 }
 
 export const STICKY_COLORS = ["#fde68a", "#fbcfe8", "#bfdbfe", "#bbf7d0", "#ddd6fe", "#fed7aa", "#e5e7eb"];
@@ -210,3 +227,13 @@ export function makeElement(type: ElementType, x: number, y: number, extra: Part
       return { ...base, ...extra } as BaseElement;
   }
 }
+
+export const FONTS: { id: string; name: string; family: string }[] = [
+  { id: "sans", name: "Sans", family: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" },
+  { id: "serif", name: "Serif", family: "Georgia, 'Times New Roman', ui-serif, serif" },
+  { id: "mono", name: "Mono", family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
+  { id: "rounded", name: "Rounded", family: "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', 'Nunito', 'Varela Round', sans-serif" },
+  { id: "hand", name: "Handwriting", family: "'Segoe Print', 'Bradley Hand', 'Comic Sans MS', 'Chalkboard SE', cursive" },
+  { id: "condensed", name: "Condensed", family: "'Arial Narrow', 'Roboto Condensed', 'Helvetica Neue', sans-serif-condensed, sans-serif" },
+];
+export const fontFamily = (id?: string) => (FONTS.find((f) => f.id === id) ?? FONTS[0]).family;

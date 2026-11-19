@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
 import { boardAndAccess } from "@/lib/boardAccess";
 import { signRealtime } from "@/lib/token";
+import { avatarUrl } from "@/lib/avatar";
 
 const GUEST_COLORS = ["#64748b", "#a16207", "#0e7490", "#9333ea"];
 
@@ -21,5 +22,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     boardId: id,
     canEdit: access.canEdit,
   });
-  return NextResponse.json({ token, id: sub, name, color, canEdit: access.canEdit });
+  const avatar = user ? avatarUrl(user) ?? null : null;
+  return NextResponse.json({ token, id: sub, name, color, avatar, canEdit: access.canEdit });
 }

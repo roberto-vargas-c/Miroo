@@ -28,7 +28,7 @@ export async function currentUser() {
   if (!claims) return null;
   const user = await db.user.findUnique({
     where: { id: claims.sub },
-    select: { id: true, name: true, email: true, color: true, emailVerifiedAt: true, sessionVersion: true },
+    select: { id: true, name: true, email: true, color: true, emailVerifiedAt: true, sessionVersion: true, avatarVersion: true },
   });
   // Sessions issued before a password reset (or "sign out everywhere") are no longer valid.
   if (!user || user.sessionVersion !== claims.sv) return null;
