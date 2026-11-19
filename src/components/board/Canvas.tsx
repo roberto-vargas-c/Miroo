@@ -377,6 +377,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
 
   // ── Keyboard ─────────────────────────────────────────────────────────────
   const clipboard = useRef<BoardElement[]>([]);
+  const clipboardStamp = useRef("");
   useEffect(() => {
     const isTyping = () => {
       const a = document.activeElement;
@@ -398,9 +399,9 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         return;
       }
       if ((e.key === "Delete" || e.key === "Backspace") && selection.length) { e.preventDefault(); api.remove(selection); setSelection([]); return; }
-      if (mod && e.key.toLowerCase() === "c") { clipboard.current = selection.map((id) => byId.get(id)!).filter(Boolean); return; }
-      if (mod && (e.key.toLowerCase() === "v" || e.key.toLowerCase() === "d")) {
-        const src = e.key.toLowerCase() === "d" ? selection.map((id) => byId.get(id)!).filter(Boolean) : clipboard.current;
+      // Copy and paste go through the system clipboard events below, so a copy from another app wins.
+      if (mod && e.key.toLowerCase() === "d") {
+        const src = selection.map((id) => byId.get(id)!).filter(Boolean);
         if (!src.length) return;
         e.preventDefault();
         const copies = duplicate(src);
@@ -431,6 +432,39 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   }, [api, byId, canEdit, elements, selection, setSelection, setTool]);
+
+  // Copy puts a marker next to the items' text; paste uses our items only when the marker is still there.
+  useEffect(() => {
+    const typing = () => {
+      const a = document.activeElement;
+      return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable;
+    };
+    const onCopy = (e: ClipboardEvent) => {
+      if (typing() || !selection.length || !e.clipboardData) return;
+      const src = selection.map((id) => byId.get(id)!).filter(Boolean);
+      if (!src.length) return;
+      const stamp = `${Date.now()}-${Math.random()}`;
+      clipboard.current = src;
+      clipboardStamp.current = stamp;
+      e.preventDefault();
+      e.clipboardData.setData("text/plain", src.map((x) => x.text ?? "").filter(Boolean).join("\n"));
+      e.clipboardData.setData(SCHEMA_CLIP, stamp);
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (typing() || !canEdit || !clipboard.current.length) return;
+      if (e.clipboardData?.getData(SCHEMA_CLIP) !== clipboardStamp.current) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const src = clipboard.current;
+      const copies = duplicate(src);
+      src.forEach((s, i) => { if (s.type === "doc") props.onCopyDoc?.(s.id, copies[i].id); });
+      api.add(copies);
+      setSelection(copies.map((c) => c.id));
+    };
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("paste", onPaste, true);
+    return () => { window.removeEventListener("copy", onCopy); window.removeEventListener("paste", onPaste, true); };
+  }, [api, byId, canEdit, selection, setSelection, props]);
 
   // ── Pointer handling ─────────────────────────────────────────────────────
   const elementIdFromTarget = (t: Konva.Node): string | null => {
@@ -1141,6 +1175,9 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
 });
 
 /** Copy elements with fresh ids, keeping connectors between copied elements attached to the copies. */
+/** Clipboard type that marks a copy made on this board (the value matches the copy). */
+const SCHEMA_CLIP = "application/x-schema-elements";
+
 function duplicate(src: BoardElement[]): BoardElement[] {
   const idMap = new Map<string, string>();
   const offset = 24;

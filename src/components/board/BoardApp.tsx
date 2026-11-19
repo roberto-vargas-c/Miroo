@@ -23,6 +23,8 @@ import { PenPalette } from "./PenPalette";
 import { getQuality, setQuality, reduceImage, pdfSideFor, type Quality } from "./imageQuality";
 import { CropDialog, applyCrop } from "./CropDialog";
 const DocPanel = dynamic(() => import("./DocPanel").then((m) => m.DocPanel), { ssr: false });
+import { pastedNotes } from "@/lib/board/miro";
+import { MiroDialog } from "./MiroImport";
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
 import { ShareDialog, type Sharing } from "./ShareDialog";
@@ -57,7 +59,7 @@ export function BoardApp(p: BoardAppProps) {
   const elements = preview?.elements ?? liveElements;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
-  const [dialog, setDialog] = useState<"csv" | "template" | null>(null);
+  const [dialog, setDialog] = useState<"csv" | "template" | "miro" | null>(null);
   const [exporting, setExporting] = useState(false);
   const canEditBoard = p.canEdit && (me?.canEdit ?? p.canEdit);
   const canEdit = canEditBoard && !preview;
@@ -441,12 +443,27 @@ export function BoardApp(p: BoardAppProps) {
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
       if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
+      if (e.defaultPrevented || e.clipboardData?.files.length) return;
       const text = e.clipboardData?.getData("text/plain") ?? "";
-      if (looksLikeUrl(text)) { e.preventDefault(); addEmbed(text); }
+      if (looksLikeUrl(text)) { e.preventDefault(); addEmbed(text); return; }
+      // Text from Miro or anywhere else: one sticky note per item, laid out in a grid.
+      const notes = pastedNotes(text, e.clipboardData?.getData("text/html") ?? "");
+      if (!notes.length) return;
+      e.preventDefault();
+      const c = canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+      const cols = Math.ceil(Math.sqrt(notes.length)), size = 200, gap = 24;
+      const rows = Math.ceil(notes.length / cols);
+      const z = Date.now();
+      const els = notes.map((t, i) => makeElement("sticky", c.x - (cols * (size + gap)) / 2 + (i % cols) * (size + gap), c.y - (rows * (size + gap)) / 2 + Math.floor(i / cols) * (size + gap), {
+        width: size, height: size, text: t, z: z + i, fontSize: t.length > 120 ? 13 : t.length > 60 ? 15 : 18,
+      }));
+      api.add(els);
+      setSelection(els.map((x) => x.id));
+      if (els.length > 1) setToast(`Pasted ${els.length} sticky notes`);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [canEdit, addEmbed]);
+  }, [canEdit, addEmbed, api, setSelection]);
 
   // ── Images ──
   const q = p.shareToken ? `?share=${encodeURIComponent(p.shareToken)}` : "";
@@ -603,6 +620,7 @@ export function BoardApp(p: BoardAppProps) {
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
       if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
+      if (e.defaultPrevented) return;
       const files = Array.from(e.clipboardData?.files ?? []);
       if (files.length) { e.preventDefault(); addFiles(files); }
     };
@@ -917,7 +935,7 @@ export function BoardApp(p: BoardAppProps) {
               <History size={18} />
             </button>
           )}
-          <div data-keep-open className="contents"><BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onSaveTemplate={() => setDialog("template")}
+          <div data-keep-open className="contents"><BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onImportMiro={p.user ? () => setDialog("miro") : undefined} onSaveTemplate={() => setDialog("template")}
             canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0}
             showAuthors={showAuthors} onToggleAuthors={() => setShowAuthors((v) => { try { localStorage.setItem("schema.showAuthors", v ? "0" : "1"); } catch { /* ignore */ } return !v; })} /></div>
           </div>
@@ -1035,6 +1053,15 @@ export function BoardApp(p: BoardAppProps) {
             setSelection(els.map((e) => e.id));
             setDialog(null);
             setToast(`Added ${els.length === 1 && els[0].type === "table" ? "a table" : `${els.length} items`} from the CSV.`);
+          }} />
+      )}
+      {dialog === "miro" && canEdit && (
+        <MiroDialog boardId={p.boardId} q={q} at={canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 }} onClose={() => setDialog(null)}
+          onImport={(els, note) => {
+            api.add(els);
+            setDialog(null);
+            setToast(note);
+            setTimeout(() => canvasRef.current?.fitContent(), 250);
           }} />
       )}
       {dialog === "template" && (

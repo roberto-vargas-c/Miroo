@@ -35,6 +35,8 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 **Export, import & history**
 - Export the board or the selection as PNG (standard or high resolution) or PDF
 - Export frames as PDF pages, one per frame, sized 1 board unit = 1 pt, so plans imported from a PDF print at their original paper size and scale
+- Paste text from Miro or any other app: each copied sticky note, line or paragraph becomes its own sticky note
+- Import a whole Miro board (board menu → Import from Miro): sticky notes, shapes, text, frames, cards, images, links and connectors keep their positions and colors. It uses Miro's REST API with your own access token (create an app in Miro with `boards:read` and install it to get one); the token is used for that import only and isn't stored
 - Import a CSV (or TSV) as sticky notes, task cards (reads title, status, assignee and due date columns) or a table
 - Version history: an automatic snapshot every 10 minutes of editing, named versions, preview any version, restore it (the current board is saved first, and the restore can be undone)
 
