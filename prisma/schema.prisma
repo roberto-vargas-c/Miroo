@@ -186,7 +186,11 @@ model Asset {
   id        String   @id @default(cuid())
   boardId   String
   mimeType  String
-  data      Bytes
+  /// Bytes kept in Postgres; null when the file lives in object storage (R2) under the asset id.
+  data      Bytes?
+  /// "db" or "r2"
+  storage   String   @default("db")
+  size      Int      @default(0)
   createdAt DateTime @default(now())
 
   board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)

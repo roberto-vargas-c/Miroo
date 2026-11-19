@@ -3,7 +3,7 @@
 import { useState } from "react";
 import {
   MousePointer2, Hand, StickyNote, Type, Square, Circle, Diamond, Spline, PenLine, Frame, ImagePlus, MessageSquarePlus,
-  SquareKanban, Table2, Network, Link2, Shapes,
+  SquareKanban, Table2, Network, Link2, Shapes, Smile,
 } from "lucide-react";
 import { SHAPES } from "@/lib/board/shapes";
 import type { Tool } from "./Canvas";
@@ -30,10 +30,10 @@ function ShapeIcon({ path }: { path: (w: number, h: number) => string }) {
 }
 
 export function Toolbar({
-  tool, setTool, canEdit, canComment, onImage, onEmbed, placingShape, setPlacingShape,
+  tool, setTool, canEdit, canComment, onImage, onEmbed, placingShape, setPlacingShape, onStickers, stickersOpen,
 }: {
   tool: Tool; setTool: (t: Tool) => void; canEdit: boolean; canComment: boolean; onImage: () => void; onEmbed: () => void;
-  placingShape: string; setPlacingShape: (s: string) => void;
+  placingShape: string; setPlacingShape: (s: string) => void; onStickers?: () => void; stickersOpen?: boolean;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const btn = (active: boolean) =>
@@ -71,7 +71,8 @@ export function Toolbar({
       {render(TOOLS_2)}
       {canEdit && (
         <>
-          <button className={btn(false)} title="Image" onClick={onImage}><ImagePlus size={18} /></button>
+          <button className={btn(!!stickersOpen)} title="Stickers, emojis and GIFs" onClick={onStickers}><Smile size={18} /></button>
+          <button className={btn(false)} title="Images, PDFs and videos" onClick={onImage}><ImagePlus size={18} /></button>
           <button className={btn(false)} title="Embed a link, video, Figma file… (or paste a URL)" onClick={onEmbed}><Link2 size={18} /></button>
         </>
       )}

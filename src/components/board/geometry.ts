@@ -65,3 +65,43 @@ export function hitElement(els: BoardElement[], p: { x: number; y: number }, exc
   }
   return undefined;
 }
+
+type Side = "l" | "r" | "t" | "b";
+function sidePoint(r: Rect, side: Side, gap = 6) {
+  const c = center(r);
+  if (side === "l") return { x: r.x - gap, y: c.y };
+  if (side === "r") return { x: r.x + r.width + gap, y: c.y };
+  if (side === "t") return { x: c.x, y: r.y - gap };
+  return { x: c.x, y: r.y + r.height + gap };
+}
+const OUT: Record<Side, [number, number]> = { l: [-1, 0], r: [1, 0], t: [0, -1], b: [0, 1] };
+
+/**
+ * Points to draw a connector with. Curved and elbow connectors leave and enter elements through
+ * the middle of a side; curved ones are a cubic Bézier (draw with `bezier`), elbows are orthogonal.
+ */
+export function connectorPath(c: ConnectorElement, byId: Map<string, BoardElement>): { points: number[]; bezier: boolean } {
+  const style = c.style ?? "straight";
+  if (style === "straight") return { points: connectorPoints(c, byId), bezier: false };
+  const a = c.from.id ? byId.get(c.from.id) : undefined;
+  const b = c.to.id ? byId.get(c.to.id) : undefined;
+  const pa = a ? center(bounds(a)) : { x: c.from.x, y: c.from.y };
+  const pb = b ? center(bounds(b)) : { x: c.to.x, y: c.to.y };
+  const dx = pb.x - pa.x, dy = pb.y - pa.y;
+  const horiz = Math.abs(dx) >= Math.abs(dy);
+  const sa: Side = horiz ? (dx >= 0 ? "r" : "l") : (dy >= 0 ? "b" : "t");
+  const sb: Side = horiz ? (dx >= 0 ? "l" : "r") : (dy >= 0 ? "t" : "b");
+  const s = a ? sidePoint(bounds(a), sa) : pa;
+  const e = b ? sidePoint(bounds(b), sb) : pb;
+  if (style === "curved") {
+    const k = Math.max(30, (horiz ? Math.abs(e.x - s.x) : Math.abs(e.y - s.y)) * 0.5);
+    const [ax, ay] = OUT[sa], [bx, by] = OUT[sb];
+    return { points: [s.x, s.y, s.x + ax * k, s.y + ay * k, e.x + bx * k, e.y + by * k, e.x, e.y], bezier: true };
+  }
+  if (horiz) {
+    const mx = (s.x + e.x) / 2;
+    return { points: [s.x, s.y, mx, s.y, mx, e.y, e.x, e.y], bezier: false };
+  }
+  const my = (s.y + e.y) / 2;
+  return { points: [s.x, s.y, s.x, my, e.x, my, e.x, e.y], bezier: false };
+}

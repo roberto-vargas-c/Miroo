@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Konva from "konva";
+import { loadGif, type GifFrames } from "./gif";
+import { stickerUrl } from "@/lib/board/stickers";
 import { Group, Rect, Text, Ellipse, Line, Image as KImage, Path, Label as KLabel, Tag } from "react-konva";
 import type {
-  BoardElement, CardElement, EmbedElement, ImageElement, MeasureElement, PenElement, ShapeElement, SymbolElement, TableElement, TopicElement,
+  BoardElement, CardElement, EmbedElement, ImageElement, VideoElement, StickerElement, MeasureElement, PenElement, ShapeElement, SymbolElement, TableElement, TopicElement,
 } from "@/lib/board/types";
 import { SHAPE_BY_ID } from "@/lib/board/shapes";
 import { cloudPath, polygonCentroid, SYMBOL_BY_ID } from "@/lib/board/arch";
@@ -11,6 +14,7 @@ import { cloudPath, polygonCentroid, SYMBOL_BY_ID } from "@/lib/board/arch";
 function useImage(src: string) {
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   useEffect(() => {
+    if (!src) { setImg(null); return; }
     const i = new window.Image();
     i.onload = () => setImg(i);
     i.src = src;
@@ -19,12 +23,111 @@ function useImage(src: string) {
   return img;
 }
 
+/** Current frame of an animated GIF, advancing on its own timing; null until decoded. */
+function useGifFrame(src: string, enabled: boolean, nodeRef: React.RefObject<Konva.Image | null>) {
+  const [gif, setGif] = useState<GifFrames | null>(null);
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    loadGif(src).then((g) => { if (alive) setGif(g); });
+    return () => { alive = false; };
+  }, [src, enabled]);
+  useEffect(() => {
+    if (!gif) return;
+    let i = 0, t: ReturnType<typeof setTimeout>;
+    const step = () => {
+      i = (i + 1) % gif.frames.length;
+      setFrame(i);
+      nodeRef.current?.getLayer()?.batchDraw();
+      t = setTimeout(step, gif.delays[i]);
+    };
+    t = setTimeout(step, gif.delays[0]);
+    return () => clearTimeout(t);
+  }, [gif, nodeRef]);
+  return gif ? gif.frames[frame] : null;
+}
+
 function ImageShape({ el }: { el: ImageElement }) {
   const img = useImage(el.src);
-  return img ? (
-    <KImage image={img} width={el.width} height={el.height} />
-  ) : (
-    <Rect width={el.width} height={el.height} fill="#f1f5f9" stroke="#cbd5e1" dash={[6, 6]} />
+  const ref = useRef<Konva.Image>(null);
+  const frame = useGifFrame(el.src, !!el.animated, ref);
+  if (!img) return <Rect width={el.width} height={el.height} fill="#f1f5f9" stroke="#cbd5e1" dash={[6, 6]} />;
+  const source = frame ?? img;
+  const c = el.crop;
+  const crop = c ? { x: c.x * source.width, y: c.y * source.height, width: c.width * source.width, height: c.height * source.height } : undefined;
+  return (
+    <KImage ref={ref} image={source} crop={crop} width={el.width} height={el.height}
+      scaleX={el.flipX ? -1 : 1} scaleY={el.flipY ? -1 : 1} x={el.flipX ? el.width : 0} y={el.flipY ? el.height : 0} />
+  );
+}
+
+function StickerShape({ el }: { el: StickerElement }) {
+  const img = useImage(el.sticker ? stickerUrl(el.sticker) ?? "" : "");
+  if (el.emoji) {
+    const fs = Math.min(el.width, el.height) * 0.8;
+    return (
+      <>
+        <Rect width={el.width} height={el.height} fill="rgba(0,0,0,0)" />
+        <Text text={el.emoji} width={el.width} height={el.height} fontSize={fs} lineHeight={1} wrap="none" align="center" verticalAlign="middle"
+          fontFamily="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif" fill="#111827" listening={false} />
+      </>
+    );
+  }
+  return img ? <KImage image={img} width={el.width} height={el.height} /> : <Rect width={el.width} height={el.height} fill="rgba(0,0,0,0)" />;
+}
+
+/** Uploaded video: shows its first frame, plays in place from the button (each viewer on their own). */
+function VideoShape({ el }: { el: VideoElement }) {
+  const imgRef = useRef<Konva.Image>(null);
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  useEffect(() => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.playsInline = true;
+    v.src = `${el.src}#t=0.1`;
+    const redraw = () => imgRef.current?.getLayer()?.batchDraw();
+    v.onloadeddata = () => { setVideo(v); redraw(); };
+    v.onseeked = redraw;
+    v.onended = () => setPlaying(false);
+    v.onpause = () => setPlaying(false);
+    v.onplay = () => setPlaying(true);
+    return () => { v.pause(); v.removeAttribute("src"); v.load(); };
+  }, [el.src]);
+  useEffect(() => {
+    if (!playing || !video) return;
+    const layer = imgRef.current?.getLayer();
+    let last = 0;
+    const anim = new Konva.Animation((f) => {
+      if (f && f.time - last > 250) { last = f.time; setProgress(video.duration ? video.currentTime / video.duration : 0); }
+    }, layer);
+    anim.start();
+    return () => { anim.stop(); };
+  }, [playing, video]);
+
+  const toggle = (e: Konva.KonvaEventObject<Event>) => {
+    e.cancelBubble = true;
+    if (!video) return;
+    if (video.paused) video.play().catch(() => {}); else video.pause();
+  };
+  const r = Math.max(14, Math.min(34, Math.min(el.width, el.height) / 6));
+  return (
+    <>
+      <Rect width={el.width} height={el.height} fill="#0f172a" cornerRadius={4} />
+      {video && <KImage ref={imgRef} image={video} width={el.width} height={el.height} />}
+      {!video && <Text text={el.name ?? "Video"} width={el.width} height={el.height} align="center" verticalAlign="middle" fill="#94a3b8" fontSize={14} listening={false} />}
+      <Group x={el.width / 2} y={el.height / 2} opacity={playing ? 0 : 0.92} onClick={toggle} onTap={toggle} name="video-play">
+        <Ellipse radiusX={r} radiusY={r} fill="rgba(15,23,42,0.65)" stroke="white" strokeWidth={2} />
+        {playing
+          ? <><Rect x={-r * 0.32} y={-r * 0.4} width={r * 0.22} height={r * 0.8} fill="white" /><Rect x={r * 0.1} y={-r * 0.4} width={r * 0.22} height={r * 0.8} fill="white" /></>
+          : <Line points={[-r * 0.3, -r * 0.45, r * 0.5, 0, -r * 0.3, r * 0.45]} closed fill="white" />}
+      </Group>
+      {playing && <Rect x={0} y={el.height - 4} width={el.width * progress} height={4} fill="#14b8a6" listening={false} />}
+      {/* While playing, a click anywhere on the video pauses it. */}
+      {playing && <Rect width={el.width} height={el.height} fill="rgba(0,0,0,0)" onClick={toggle} onTap={toggle} />}
+    </>
   );
 }
 
@@ -84,6 +187,8 @@ export function ElementNode({ el, hidden, measure, zoom = 1, editingCell, dragga
     x: el.x,
     y: el.y,
     rotation: el.rotation,
+    // Pen strokes apply their own opacity to the line (the highlighter is translucent).
+    opacity: el.type === "pen" ? 1 : el.opacity ?? 1,
     draggable,
     onDragStart: () => onDragStart(el.id),
     onDragMove: () => onDragMove(el.id),
@@ -162,6 +267,18 @@ export function ElementNode({ el, hidden, measure, zoom = 1, editingCell, dragga
       return (
         <Group {...common}>
           <ImageShape el={el as ImageElement} />
+        </Group>
+      );
+    case "sticker":
+      return (
+        <Group {...common}>
+          <StickerShape el={el as StickerElement} />
+        </Group>
+      );
+    case "video":
+      return (
+        <Group {...common}>
+          <VideoShape el={el as VideoElement} />
         </Group>
       );
     case "dimension": {
