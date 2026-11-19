@@ -1,13 +1,13 @@
 "use client";
 
-import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight } from "lucide-react";
+import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight, Scale } from "lucide-react";
 import { STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement } from "@/lib/board/types";
 import type { BoardApi } from "./useBoard";
 
 export function PropertiesBar({
-  selected, all, api, onDuplicate, onDelete,
+  selected, all, api, onDuplicate, onDelete, onSetScale,
 }: {
-  selected: BoardElement[]; all: BoardElement[]; api: BoardApi; onDuplicate: () => void; onDelete: () => void;
+  selected: BoardElement[]; all: BoardElement[]; api: BoardApi; onDuplicate: () => void; onDelete: () => void; onSetScale?: () => void;
 }) {
   if (!selected.length) return null;
   const types = new Set(selected.map((s) => s.type));
@@ -20,8 +20,8 @@ export function PropertiesBar({
   const hasText = selected.some((s) => ["sticky", "rect", "ellipse", "diamond", "text"].includes(s.type));
 
   const fillColors = only("sticky") ? STICKY_COLORS : SHAPE_COLORS;
-  const showFill = selected.some((s) => ["sticky", "rect", "ellipse", "diamond", "frame"].includes(s.type));
-  const showStroke = selected.some((s) => ["rect", "ellipse", "diamond", "text", "pen", "connector"].includes(s.type));
+  const showFill = selected.some((s) => ["sticky", "rect", "ellipse", "diamond", "frame", "wall"].includes(s.type));
+  const showStroke = selected.some((s) => ["rect", "ellipse", "diamond", "text", "pen", "connector", "dimension", "area", "cloud", "symbol"].includes(s.type));
   const sw = (c: string, active: boolean, onClick: () => void) => (
     <button key={c} onClick={onClick} className={`h-6 w-6 rounded-full border ${active ? "ring-2 ring-brand-500 ring-offset-1" : "border-slate-300"}`} style={{ background: c }} title={c} />
   );
@@ -38,7 +38,7 @@ export function PropertiesBar({
         <>
           <div className="h-6 w-px bg-slate-200" />
           <div className="flex items-center gap-1" title="Line / text color">
-            {["#111827", "#0f8573", "#2563eb", "#db2777", "#ea580c"].map((c) => sw(c, first.stroke === c, () => setAll({ stroke: c })))}
+            {["#111827", "#dc2626", "#0f8573", "#2563eb", "#db2777", "#ea580c"].map((c) => sw(c, first.stroke === c, () => setAll({ stroke: c })))}
           </div>
         </>
       )}
@@ -59,6 +59,11 @@ export function PropertiesBar({
             setAll(next as Partial<BoardElement>);
           }}>
           <ArrowLeftRight size={16} />
+        </button>
+      )}
+      {onSetScale && (
+        <button className="flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-slate-100" title="Set this plan's real-world scale" onClick={onSetScale}>
+          <Scale size={16} /> Scale
         </button>
       )}
       <div className="h-6 w-px bg-slate-200" />

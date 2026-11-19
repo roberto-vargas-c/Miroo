@@ -10,8 +10,15 @@ import {
   type ConnectorElement,
   type ElementType,
   type PenElement,
+  type MeasureElement,
+  type SymbolElement,
+  hasPoints,
 } from "@/lib/board/types";
 import { ElementNode } from "./ElementNode";
+import {
+  DEFAULT_PX_PER_METER, formatArea, formatLength, metersPerPxAt, polygonArea, polylineLength, snapAngle, SYMBOL_BY_ID,
+  type BoardScale, type Unit,
+} from "@/lib/board/arch";
 import type { BoardApi, Peer } from "./useBoard";
 import {
   bounds,
@@ -26,7 +33,10 @@ import {
   type Rect as R,
 } from "./geometry";
 
-export type Tool = "select" | "hand" | "sticky" | "text" | "rect" | "ellipse" | "diamond" | "connector" | "pen" | "frame" | "comment";
+export type Tool =
+  | "select" | "hand" | "sticky" | "text" | "rect" | "ellipse" | "diamond" | "connector" | "pen" | "frame" | "comment"
+  // architecture
+  | "measure" | "area" | "wall" | "cloud" | "highlighter" | "calibrate" | "symbol";
 
 export type CanvasHandle = {
   zoomBy: (factor: number) => void;
@@ -51,6 +61,11 @@ type Props = {
   camera: Camera;
   setCamera: (c: Camera | ((c: Camera) => Camera)) => void;
   penColor: string;
+  /** Architecture: board fallback scale, display unit, symbol being placed, calibrate callback. */
+  boardScale?: BoardScale;
+  unit?: Unit;
+  placingSymbol?: string | null;
+  onCalibrate?: (line: { x1: number; y1: number; x2: number; y2: number }) => void;
   onComment: (p: { x: number; y: number }) => void;
   overlay?: React.ReactNode;
   /** Called when the user pans or zooms by hand (stops following someone). */
@@ -64,18 +79,20 @@ type Props = {
 };
 
 const SHAPE_TOOLS: Partial<Record<Tool, ElementType>> = { rect: "rect", ellipse: "ellipse", diamond: "diamond", frame: "frame" };
-const TEXT_TYPES = new Set<ElementType>(["sticky", "rect", "ellipse", "diamond", "text", "frame"]);
+const TEXT_TYPES = new Set<ElementType>(["sticky", "rect", "ellipse", "diamond", "text", "frame", "cloud"]);
 
 type Gesture =
   | { kind: "pan"; startX: number; startY: number; cam: Camera }
   | { kind: "marquee"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: "shape"; type: ElementType; x0: number; y0: number; x1: number; y1: number }
   | { kind: "connector"; fromId?: string; x0: number; y0: number; x1: number; y1: number }
-  | { kind: "pen"; points: number[] };
+  | { kind: "pen"; points: number[]; highlight?: boolean }
+  | { kind: "line"; purpose: "measure" | "wall" | "calibrate"; x0: number; y0: number; x1: number; y1: number }
+  | { kind: "area"; points: number[]; cx: number; cy: number };
 
 export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref) {
   const { elements, api, peers, canEdit, tool, setTool, selection, setSelection, camera, setCamera, penColor, onComment, overlay,
-    onManualCamera, onVote, badges, hiddenIds, presenting } = props;
+    onManualCamera, onVote, badges, hiddenIds, presenting, boardScale = null, unit = "m", placingSymbol, onCalibrate } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -83,6 +100,13 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
+  const shiftDown = useRef(false);
+  useEffect(() => {
+    const f = (e: KeyboardEvent) => { shiftDown.current = e.shiftKey; };
+    window.addEventListener("keydown", f);
+    window.addEventListener("keyup", f);
+    return () => { window.removeEventListener("keydown", f); window.removeEventListener("keyup", f); };
+  }, []);
   const dragState = useRef<{ start: Map<string, { x: number; y: number }>; children: Map<string, string[]> } | null>(null);
 
   const byId = useMemo(() => new Map(elements.map((e) => [e.id, e])), [elements]);
@@ -201,7 +225,8 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       if (isTyping()) return;
       const mod = e.metaKey || e.ctrlKey;
       if (e.code === "Space") { setSpaceDown(true); e.preventDefault(); return; }
-      if (e.key === "Escape") { setSelection([]); setTool("select"); return; }
+      if (e.key === "Escape") { setGesture(null); setSelection([]); setTool("select"); return; }
+      if (e.key === "Enter") { finishAreaRef.current(); return; }
       if (mod && e.key.toLowerCase() === "a") { e.preventDefault(); setSelection(elements.map((x) => x.id)); return; }
       if (!canEdit) return;
       if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) api.redo(); else api.undo(); return; }
@@ -227,7 +252,10 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         return;
       }
       if (mod || e.altKey) return;
-      const shortcuts: Record<string, Tool> = { v: "select", h: "hand", n: "sticky", t: "text", r: "rect", o: "ellipse", l: "connector", p: "pen", f: "frame", c: "comment" };
+      const shortcuts: Record<string, Tool> = {
+        v: "select", h: "hand", n: "sticky", t: "text", r: "rect", o: "ellipse", l: "connector", p: "pen", f: "frame", c: "comment",
+        m: "measure", a: "area", w: "wall", k: "calibrate", q: "cloud", i: "highlighter",
+      };
       const t = shortcuts[e.key.toLowerCase()];
       if (t) setTool(t);
     };
@@ -302,7 +330,33 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       setGesture({ kind: "connector", fromId: hit?.id, x0: p.x, y0: p.y, x1: p.x, y1: p.y });
       return;
     }
-    if (tool === "pen") { setGesture({ kind: "pen", points: [p.x, p.y] }); return; }
+    if (tool === "pen" || tool === "highlighter") { setGesture({ kind: "pen", points: [p.x, p.y], highlight: tool === "highlighter" }); return; }
+    if (tool === "measure" || tool === "wall" || tool === "calibrate") {
+      setGesture({ kind: "line", purpose: tool, x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+      return;
+    }
+    if (tool === "cloud") { setGesture({ kind: "shape", type: "cloud", x0: p.x, y0: p.y, x1: p.x, y1: p.y }); return; }
+    if (tool === "area") {
+      if (gesture?.kind !== "area") { setGesture({ kind: "area", points: [p.x, p.y], cx: p.x, cy: p.y }); return; }
+      const [fx, fy] = gesture.points;
+      if (gesture.points.length >= 6 && Math.hypot(p.x - fx, p.y - fy) < 10 / camera.scale) { finishArea(); return; }
+      const lx = gesture.points[gesture.points.length - 2], ly = gesture.points[gesture.points.length - 1];
+      if (Math.hypot(p.x - lx, p.y - ly) > 2 / camera.scale) setGesture({ ...gesture, points: [...gesture.points, p.x, p.y] });
+      return;
+    }
+    if (tool === "symbol" && placingSymbol) {
+      const def = SYMBOL_BY_ID.get(placingSymbol);
+      if (!def) return;
+      const k = metersPerPxAt(elements, p, boardScale);
+      const pxPerM = k ? 1 / k : DEFAULT_PX_PER_METER;
+      const w = def.size[0] * pxPerM, h = def.size[1] * pxPerM;
+      const el = makeElement("symbol", p.x - w / 2, p.y - h / 2, { width: w, height: h, fill: "#ffffff", stroke: "#111827" }) as SymbolElement;
+      el.symbol = def.id;
+      api.add([el]);
+      setSelection([el.id]);
+      setTool("select");
+      return;
+    }
   };
 
   const lastCursor = useRef(0);
@@ -323,20 +377,52 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         setGesture({ ...gesture, x1: p.x, y1: p.y });
         break;
       case "pen":
-        setGesture({ kind: "pen", points: [...gesture.points, p.x, p.y] });
+        setGesture({ ...gesture, points: [...gesture.points, p.x, p.y] });
+        break;
+      case "line": {
+        const q = shiftDown.current ? snapAngle(gesture.x0, gesture.y0, p.x, p.y) : p;
+        setGesture({ ...gesture, x1: q.x, y1: q.y });
+        break;
+      }
+      case "area":
+        setGesture({ ...gesture, cx: p.x, cy: p.y });
         break;
     }
   };
 
   const onPointerUp = () => {
     const g = gesture;
+    if (g?.kind === "area") return; // areas are finished with a double-click, Enter, or by clicking the first point
     setGesture(null);
     if (!g) return;
+    if (g.kind === "line") {
+      const len = Math.hypot(g.x1 - g.x0, g.y1 - g.y0);
+      if (len < 5 / camera.scale) return;
+      if (g.purpose === "calibrate") { onCalibrate?.({ x1: g.x0, y1: g.y0, x2: g.x1, y2: g.y1 }); setTool("select"); return; }
+      if (g.purpose === "measure") {
+        const x = Math.min(g.x0, g.x1), y = Math.min(g.y0, g.y1);
+        const el = makeElement("dimension", x, y, {
+          width: Math.max(1, Math.abs(g.x1 - g.x0)), height: Math.max(1, Math.abs(g.y1 - g.y0)), fill: "transparent", stroke: "#be123c",
+        }) as MeasureElement;
+        el.points = [g.x0 - x, g.y0 - y, g.x1 - x, g.y1 - y];
+        api.add([el]);
+        return;
+      }
+      // Wall: a rotated rect whose centerline runs from the start to the end point; 20 cm thick at plan scale.
+      const k = metersPerPxAt(elements, { x: (g.x0 + g.x1) / 2, y: (g.y0 + g.y1) / 2 }, boardScale);
+      const t = k ? 0.2 / k : 10;
+      const a = Math.atan2(g.y1 - g.y0, g.x1 - g.x0);
+      const el = makeElement("wall", g.x0 + Math.sin(a) * t / 2, g.y0 - Math.cos(a) * t / 2, {
+        width: len, height: t, rotation: (a * 180) / Math.PI, fill: "#374151", stroke: "#1f2937",
+      });
+      api.add([el]);
+      return;
+    }
     if (g.kind === "marquee") {
       const r = normRect(g.x0, g.y0, g.x1, g.y1);
       if (r.width < 3 && r.height < 3) return;
       const hits = elements.filter((el) => {
-        if (el.type === "connector") return false;
+        if (el.type === "connector" || el.locked) return false;
         const b = bounds(el);
         return el.type === "frame" ? contains(r, b) : intersects(r, b);
       }).map((el) => el.id);
@@ -347,6 +433,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       if (r.width < 8 && r.height < 8) r = { x: g.x0 - el.width / 2, y: g.y0 - el.height / 2, width: el.width, height: el.height };
       Object.assign(el, r);
       if (g.type === "frame") el.z = minZ() - 1;
+      if (g.type === "cloud") Object.assign(el, { fill: "transparent", stroke: "#dc2626", fontSize: 16, text: "" });
       api.add([el]);
       setSelection([el.id]);
       setTool("select");
@@ -370,10 +457,54 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       Object.assign(el, {
         width: Math.max(1, Math.max(...xs) - x), height: Math.max(1, Math.max(...ys) - y),
         points: g.points.map((v, i) => (i % 2 === 0 ? v - x : v - y)),
-        stroke: penColor, strokeWidth: 3, fill: "transparent",
+        stroke: g.highlight ? (penColor === "#111827" ? "#facc15" : penColor) : penColor,
+        strokeWidth: g.highlight ? 18 : 3, opacity: g.highlight ? 0.35 : 1, fill: "transparent",
       });
       api.add([el]);
     }
+  };
+
+  function finishArea() {
+    const g = gesture;
+    if (g?.kind !== "area") return;
+    setGesture(null);
+    // Drop near-duplicate points (a double-click adds the last point twice).
+    const pts: number[] = [];
+    for (let i = 0; i < g.points.length; i += 2) {
+      const n = pts.length;
+      if (n && Math.hypot(g.points[i] - pts[n - 2], g.points[i + 1] - pts[n - 1]) < 3 / camera.scale) continue;
+      pts.push(g.points[i], g.points[i + 1]);
+    }
+    if (pts.length < 6) return;
+    const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const el = makeElement("area", x, y, {
+      width: Math.max(1, Math.max(...xs) - x), height: Math.max(1, Math.max(...ys) - y),
+      fill: "rgba(20,163,139,0.14)", stroke: "#0f766e",
+    }) as MeasureElement;
+    el.points = pts.map((v, i) => (i % 2 === 0 ? v - x : v - y));
+    api.add([el]);
+  }
+
+  const finishAreaRef = useRef(finishArea);
+  finishAreaRef.current = finishArea;
+
+  /** Text shown on dimension and area elements, using the plan scale under them. */
+  const measureLabel = (el: BoardElement): string | undefined => {
+    if (el.type !== "dimension" && el.type !== "area") return undefined;
+    const m = el as MeasureElement;
+    const k = metersPerPxAt(elements, { x: el.x + el.width / 2, y: el.y + el.height / 2 }, boardScale);
+    if (el.type === "dimension") {
+      const len = polylineLength(m.points);
+      return k ? formatLength(len * k, unit) : `${Math.round(len)} px (no scale)`;
+    }
+    const a = polygonArea(m.points), per = polylineLength(m.points, true);
+    return k ? `${formatArea(a * k * k, unit)}\nP ${formatLength(per * k, unit)}` : `${Math.round(a)} px² (no scale)`;
+  };
+  const livePreview = (x0: number, y0: number, x1: number, y1: number) => {
+    const k = metersPerPxAt(elements, { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, boardScale);
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    return k ? formatLength(len * k, unit) : `${Math.round(len)} px`;
   };
 
   // ── Drag & transform ─────────────────────────────────────────────────────
@@ -434,7 +565,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       x: node.x(), y: node.y(), rotation: node.rotation(),
       width: Math.max(20, el.width * sx), height: Math.max(20, el.height * sy),
     };
-    if (el.type === "pen") patch.points = (el as PenElement).points.map((v, i) => (i % 2 === 0 ? v * sx : v * sy));
+    if (hasPoints(el)) patch.points = el.points.map((v, i) => (i % 2 === 0 ? v * sx : v * sy));
     if (el.type === "text" || el.type === "sticky") patch.fontSize = Math.max(8, Math.round((el.fontSize ?? 16) * (el.type === "text" ? sy : 1)));
     api.update(id, patch);
   };
@@ -521,6 +652,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onDblClick={() => { if (gesture?.kind === "area") finishArea(); }}
         onContextMenu={(e) => e.evt.preventDefault()}
       >
         <Layer>
@@ -536,7 +668,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
               );
             }
             return (
-              <ElementNode key={el.id} el={el} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
+              <ElementNode key={el.id} el={el} measure={measureLabel(el)} zoom={s} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
                 draggable={canEdit && tool === "select" && !spaceDown && !el.locked && editingId !== el.id && !onVote && !presenting}
                 hidden={hiddenIds?.has(el.id) ?? false}
                 onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onTransformEnd={onTransformEnd} onDblClick={startEdit} />
@@ -577,7 +709,27 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
           {gesture?.kind === "connector" && (
             <Arrow points={[gesture.x0, gesture.y0, gesture.x1, gesture.y1]} stroke="#0f8573" fill="#0f8573" strokeWidth={2} dash={[8, 6]} />
           )}
-          {gesture?.kind === "pen" && <Line points={gesture.points} stroke={penColor} strokeWidth={3} lineCap="round" lineJoin="round" tension={0.4} />}
+          {gesture?.kind === "pen" && (
+            <Line points={gesture.points} stroke={gesture.highlight ? (penColor === "#111827" ? "#facc15" : penColor) : penColor}
+              strokeWidth={gesture.highlight ? 18 : 3} opacity={gesture.highlight ? 0.35 : 1} lineCap="round" lineJoin="round" tension={0.4} />
+          )}
+          {gesture?.kind === "line" && (
+            <>
+              <Line points={[gesture.x0, gesture.y0, gesture.x1, gesture.y1]}
+                stroke={gesture.purpose === "wall" ? "#374151" : gesture.purpose === "calibrate" ? "#7c3aed" : "#be123c"}
+                strokeWidth={gesture.purpose === "wall" ? 6 / s : 2 / s} dash={gesture.purpose === "wall" ? undefined : [6 / s, 4 / s]} />
+              <KText x={gesture.x1 + 10 / s} y={gesture.y1 + 10 / s} text={livePreview(gesture.x0, gesture.y0, gesture.x1, gesture.y1)}
+                fontSize={13 / s} fill="#111827" fontStyle="600" />
+            </>
+          )}
+          {gesture?.kind === "area" && (
+            <>
+              <Line points={[...gesture.points, gesture.cx, gesture.cy]} closed fill="rgba(20,163,139,0.12)" stroke="#0f766e" strokeWidth={1.5 / s} dash={[6 / s, 4 / s]} />
+              <Circle x={gesture.points[0]} y={gesture.points[1]} radius={5 / s} fill="#0f766e" />
+              <KText x={gesture.cx + 12 / s} y={gesture.cy + 12 / s} fontSize={12 / s} fill="#0f766e"
+                text={gesture.points.length >= 4 ? "Double-click, press Enter or click the first point to finish" : "Click to add corners"} />
+            </>
+          )}
           {tool === "connector" && gesture?.kind === "connector" && (() => {
             const hit = hitElement(elements, { x: gesture.x1, y: gesture.y1 }, gesture.fromId);
             return hit ? <Rect {...bounds(hit)} stroke="#14a38b" strokeWidth={2 / s} cornerRadius={6} /> : null;

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
 import { boardAndAccess } from "@/lib/boardAccess";
 
-const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_BYTES = 25 * 1024 * 1024; // rendered plan sheets can be large
 const TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -13,7 +13,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const file = (await req.formData()).get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "No file" }, { status: 400 });
   if (!TYPES.has(file.type)) return NextResponse.json({ error: "Only PNG, JPEG, GIF and WebP images are supported" }, { status: 400 });
-  if (file.size > MAX_BYTES) return NextResponse.json({ error: "Images must be under 8 MB" }, { status: 400 });
+  if (file.size > MAX_BYTES) return NextResponse.json({ error: "Images must be under 25 MB" }, { status: 400 });
   const asset = await db.asset.create({
     data: { id: randomBytes(16).toString("hex"), boardId: id, mimeType: file.type, data: Buffer.from(await file.arrayBuffer()) },
     select: { id: true },
