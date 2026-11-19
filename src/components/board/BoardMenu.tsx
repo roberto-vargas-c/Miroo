@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Ellipsis, FileDown, FileImage, FileSpreadsheet, History, LayoutTemplate, RotateCcw, X, Eye, UserRound } from "lucide-react";
+import { Ellipsis, FileDown, FileImage, FileSpreadsheet, History, LayoutTemplate, RotateCcw, X, Eye, UserRound, Import } from "lucide-react";
 import type { BoardElement } from "@/lib/board/types";
 import { parseCsv, csvToElements, CSV_LIMITS, type CsvMode } from "@/lib/board/csv";
 import { saveBoardAsTemplate } from "@/app/actions/workspace";
@@ -12,9 +12,9 @@ export type ExportKind = "png" | "png-hi" | "pdf" | "pdf-frames";
 // ── "More" menu: export, import, templates ──────────────────────────────────
 
 export function BoardMenu({
-  onExport, onImportCsv, onSaveTemplate, canEdit, canTemplate, frameCount, hasSelection, showAuthors, onToggleAuthors,
+  onExport, onImportCsv, onImportMiro, onSaveTemplate, canEdit, canTemplate, frameCount, hasSelection, showAuthors, onToggleAuthors,
 }: {
-  onExport: (k: ExportKind) => void; onImportCsv: () => void; onSaveTemplate: () => void;
+  onExport: (k: ExportKind) => void; onImportCsv: () => void; onImportMiro?: () => void; onSaveTemplate: () => void;
   canEdit: boolean; canTemplate: boolean; frameCount: number; hasSelection: boolean;
   showAuthors?: boolean; onToggleAuthors?: () => void;
 }) {
@@ -52,6 +52,7 @@ export function BoardMenu({
           {onToggleAuthors && item(showAuthors ? "Hide authors on sticky notes" : "Show authors on sticky notes", <UserRound size={16} />, onToggleAuthors)}
           {(canEdit || canTemplate) && <div className="my-1 h-px bg-slate-100" />}
           {canEdit && item("Import CSV…", <FileSpreadsheet size={16} />, onImportCsv)}
+          {canEdit && onImportMiro && item("Import from Miro…", <Import size={16} />, onImportMiro)}
           {canTemplate && item("Save board as template…", <LayoutTemplate size={16} />, onSaveTemplate)}
         </div>
       )}
