@@ -52,6 +52,21 @@ jobs:
         run: |
           [ -z "$HYPERDRIVE_ID" ] || sed -i -E "s/\"id\": \"[0-9a-f]{32}\"/\"id\": \"${HYPERDRIVE_ID}\"/" wrangler.jsonc
 
+      # Videos and other large uploads go to an R2 bucket. The bucket is created on the first deploy;
+      # if R2 isn't enabled on the account (or the token can't use it), uploads stay in Postgres (25 MB max).
+      - name: Set up video storage (R2)
+        run: |
+          if npx wrangler r2 bucket info schema-media >/dev/null 2>&1 || npx wrangler r2 bucket create schema-media; then
+            node -e '
+              const fs = require("fs");
+              const s = fs.readFileSync("wrangler.jsonc", "utf8");
+              fs.writeFileSync("wrangler.jsonc", s.replace(/"send_email":/, "\"r2_buckets\": [{ \"binding\": \"MEDIA\", \"bucket_name\": \"schema-media\" }],\n  \"send_email\":"));
+            '
+            grep -q '"MEDIA"' wrangler.jsonc && echo "R2 bucket schema-media bound as MEDIA"
+          else
+            echo "::warning::Couldn't use R2 (enable R2 in the Cloudflare dashboard and give the API token R2 edit access). Videos are limited to 25 MB until then."
+          fi
+
       - name: Build
         run: npm run cf:build
 

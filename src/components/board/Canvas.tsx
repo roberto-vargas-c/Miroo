@@ -13,6 +13,8 @@ import {
   type MeasureElement,
   type SymbolElement,
   type EmbedElement,
+  type VideoElement,
+  type ConnectorStyle,
   type TableElement,
   type TopicElement,
   hasPoints,
@@ -27,6 +29,7 @@ import {
   bounds,
   clampScale,
   connectorPoints,
+  connectorPath,
   contains,
   hitElement,
   intersects,
@@ -64,6 +67,8 @@ export type CanvasHandle = {
 const MAX_EXPORT_SIDE = 14000;
 const MAX_EXPORT_AREA = 120_000_000;
 
+export type WheelMode = "auto" | "zoom" | "pan";
+
 type Props = {
   elements: BoardElement[];
   api: BoardApi;
@@ -76,6 +81,13 @@ type Props = {
   camera: Camera;
   setCamera: (c: Camera | ((c: Camera) => Camera)) => void;
   penColor: string;
+  /** Stroke width for the pen / highlighter in screen-independent board units. */
+  penWidth?: number;
+  onOpenVideo?: (el: VideoElement) => void;
+  /** What the scroll wheel does: auto (mouse zooms, trackpad pans), always zoom, or always pan. */
+  wheelMode?: WheelMode;
+  /** Connector style for new connectors. */
+  connectorStyle?: ConnectorStyle;
   /** Architecture: board fallback scale, display unit, symbol being placed, calibrate callback. */
   boardScale?: BoardScale;
   unit?: Unit;
@@ -111,7 +123,11 @@ type Gesture =
 export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref) {
   const { elements, api, peers, canEdit, tool, setTool, selection, setSelection, camera, setCamera, penColor, onComment, overlay,
     onManualCamera, onVote, badges, hiddenIds, presenting, boardScale = null, unit = "m", placingSymbol, onCalibrate,
-    placingShape = "triangle", onOpenEmbed } = props;
+    placingShape = "triangle", onOpenEmbed, onOpenVideo } = props;
+  const wheelMode = props.wheelMode ?? "auto";
+  const cameraRef = useRef(camera);
+  cameraRef.current = camera;
+  const penWidth = props.penWidth ?? (tool === "highlighter" ? 18 : 3);
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -242,12 +258,87 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     const p = stageRef.current?.getPointerPosition();
     if (!p) return;
     onManualCamera?.();
-    if (e.evt.ctrlKey || e.evt.metaKey) {
-      zoomAround(Math.exp(-e.evt.deltaY * 0.01), p.x, p.y);
+    const ev = e.evt;
+    // Pinch on a trackpad arrives as ctrl+wheel. Otherwise the setting decides: "auto" zooms with a
+    // mouse wheel and pans with two fingers on a trackpad, which is told apart by its small, smooth deltas.
+    const mouseWheel = ev.deltaMode === 1 || (ev.deltaX === 0 && Math.abs(ev.deltaY) >= 40 && Number.isInteger(ev.deltaY));
+    const zoom = ev.ctrlKey || ev.metaKey || wheelMode === "zoom" || (wheelMode === "auto" && mouseWheel);
+    if (zoom) {
+      const dy = ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaY;
+      const k = ev.ctrlKey && !mouseWheel ? 0.01 : 0.0018;
+      zoomAround(Math.exp(-Math.max(-300, Math.min(300, dy)) * k), p.x, p.y);
     } else {
-      setCamera((c) => ({ ...c, x: c.x - e.evt.deltaX, y: c.y - e.evt.deltaY }));
+      setCamera((c) => ({ ...c, x: c.x - ev.deltaX, y: c.y - ev.deltaY }));
     }
   };
+
+  // ── Touch: two-finger pinch to zoom and pan (iPad, touch screens); Safari trackpad pinch ──
+  const pinch = useRef<{ pts: Map<number, { x: number; y: number }>; start?: { d: number; mx: number; my: number; cam: Camera } }>({ pts: new Map() });
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const local = (e: PointerEvent) => { const r = el.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+    const begin = () => {
+      const [a, b] = [...pinch.current.pts.values()];
+      pinch.current.start = { d: Math.hypot(b.x - a.x, b.y - a.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, cam: cameraRef.current };
+      setGesture(null);
+      stageRef.current?.find(".element").forEach((n) => { if (n.isDragging()) n.stopDrag(); });
+      onManualCamera?.();
+    };
+    const down = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      pinch.current.pts.set(e.pointerId, local(e));
+      if (pinch.current.pts.size === 2) begin();
+    };
+    const move = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || !pinch.current.pts.has(e.pointerId)) return;
+      pinch.current.pts.set(e.pointerId, local(e));
+      const st = pinch.current.start;
+      if (!st || pinch.current.pts.size < 2) return;
+      e.stopPropagation();
+      const [a, b] = [...pinch.current.pts.values()];
+      const d = Math.hypot(b.x - a.x, b.y - a.y) || 1, mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const scale = clampScale(st.cam.scale * (d / st.d));
+      const wx = (st.mx - st.cam.x) / st.cam.scale, wy = (st.my - st.cam.y) / st.cam.scale;
+      setCamera({ scale, x: mx - wx * scale, y: my - wy * scale });
+    };
+    const up = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      pinch.current.pts.delete(e.pointerId);
+      if (pinch.current.pts.size < 2 && pinch.current.start) {
+        pinch.current.start = undefined;
+        // Swallow the leftover finger so it doesn't start a selection.
+        pinch.current.pts.clear();
+        pinchEnded.current = performance.now();
+      }
+    };
+    // Safari on a Mac sends trackpad pinches as gesture events instead of ctrl+wheel.
+    let gScale = 1;
+    const gStart = (e: Event) => { e.preventDefault(); gScale = 1; };
+    const gChange = (e: Event) => {
+      e.preventDefault();
+      const ge = e as Event & { scale: number; clientX: number; clientY: number };
+      const r = el.getBoundingClientRect();
+      zoomAround(ge.scale / gScale, ge.clientX - r.left, ge.clientY - r.top);
+      gScale = ge.scale;
+    };
+    el.addEventListener("pointerdown", down, true);
+    el.addEventListener("pointermove", move, true);
+    el.addEventListener("pointerup", up, true);
+    el.addEventListener("pointercancel", up, true);
+    el.addEventListener("gesturestart", gStart);
+    el.addEventListener("gesturechange", gChange);
+    return () => {
+      el.removeEventListener("pointerdown", down, true);
+      el.removeEventListener("pointermove", move, true);
+      el.removeEventListener("pointerup", up, true);
+      el.removeEventListener("pointercancel", up, true);
+      el.removeEventListener("gesturestart", gStart);
+      el.removeEventListener("gesturechange", gChange);
+    };
+  }, [setCamera, zoomAround, onManualCamera]);
+  const pinchEnded = useRef(0);
+  const pinching = () => !!pinch.current.start || performance.now() - pinchEnded.current < 150;
 
   // ── Keyboard ─────────────────────────────────────────────────────────────
   const clipboard = useRef<BoardElement[]>([]);
@@ -318,6 +409,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const minZ = () => elements.reduce((m, e) => Math.min(m, e.z), 0);
 
   const onPointerDown = (e: KonvaEventObject<PointerEvent>) => {
+    if (pinching()) return;
     const p = pointerWorld();
     const sp = stageRef.current?.getPointerPosition();
     if (!p || !sp) return;
@@ -410,6 +502,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
 
   const lastCursor = useRef(0);
   const onPointerMove = () => {
+    if (pinch.current.start) return;
     const p = pointerWorld();
     const sp = stageRef.current?.getPointerPosition();
     if (!p || !sp) return;
@@ -495,7 +588,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         width: 0, height: 0, stroke: penColor === "#ffffff" ? "#334155" : penColor,
         from: { id: g.fromId, x: g.x0, y: g.y0 },
         to: { id: to?.id, x: g.x1, y: g.y1 },
-        arrowEnd: true, arrowStart: false,
+        arrowEnd: true, arrowStart: false, style: props.connectorStyle ?? "straight",
       });
       api.add([c]);
       setSelection([c.id]);
@@ -508,7 +601,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         width: Math.max(1, Math.max(...xs) - x), height: Math.max(1, Math.max(...ys) - y),
         points: g.points.map((v, i) => (i % 2 === 0 ? v - x : v - y)),
         stroke: g.highlight ? (penColor === "#111827" ? "#facc15" : penColor) : penColor,
-        strokeWidth: g.highlight ? 18 : 3, opacity: g.highlight ? 0.35 : 1, fill: "transparent",
+        strokeWidth: penWidth, opacity: g.highlight ? 0.35 : 1, fill: "transparent",
       });
       api.add([el]);
     }
@@ -560,7 +653,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     el.level = level;
     const c = makeElement("connector", 0, 0) as ConnectorElement;
     Object.assign(c, {
-      width: 0, height: 0, stroke: color, arrowEnd: false, arrowStart: false,
+      width: 0, height: 0, stroke: color, arrowEnd: false, arrowStart: false, style: "curved",
       from: { id: parent.id, x: parent.x + parent.width, y: parent.y + parent.height / 2 },
       to: { id: el.id, x, y: y + h / 2 },
     });
@@ -662,6 +755,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     const el = byId.get(id);
     if (!el) return;
     if (el.type === "embed") { onOpenEmbed?.(el as EmbedElement); return; }
+    if (el.type === "video") { onOpenVideo?.(el as VideoElement); return; }
     if (!canEdit || hiddenIds?.has(id) || onVote) return;
     if (el.type === "table") {
       const p = pointerWorld();
@@ -776,6 +870,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       className="absolute inset-0 overflow-hidden"
       style={{
         cursor,
+        touchAction: "none",
         backgroundColor: "#f8fafc",
         backgroundImage: s > 0.25 ? "radial-gradient(#cbd5e1 1px, transparent 1px)" : undefined,
         backgroundSize: `${gridSize}px ${gridSize}px`,
@@ -810,10 +905,10 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
           {elements.map((el) => {
             if (el.type === "connector") {
               const c = el as ConnectorElement;
-              const pts = connectorPoints(c, byId);
+              const { points: pts, bezier } = connectorPath(c, byId);
               const sel = selection.includes(c.id);
               return (
-                <Arrow key={c.id} id={c.id} name="connector" points={pts} stroke={sel ? "#0f8573" : c.stroke} fill={sel ? "#0f8573" : c.stroke}
+                <Arrow key={c.id} id={c.id} name="connector" points={pts} bezier={bezier} lineJoin="round" stroke={sel ? "#0f8573" : c.stroke} fill={sel ? "#0f8573" : c.stroke}
                   strokeWidth={2} hitStrokeWidth={16} pointerLength={12} pointerWidth={12}
                   pointerAtBeginning={c.arrowStart} pointerAtEnding={c.arrowEnd} lineCap="round" />
               );
@@ -857,12 +952,15 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
             <Rect {...normRect(gesture.x0, gesture.y0, gesture.x1, gesture.y1)} stroke="#0f8573" dash={[6 / s, 4 / s]} strokeWidth={1.5 / s}
               cornerRadius={gesture.type === "ellipse" ? 999 : 6} />
           )}
-          {gesture?.kind === "connector" && (
-            <Arrow points={[gesture.x0, gesture.y0, gesture.x1, gesture.y1]} stroke="#0f8573" fill="#0f8573" strokeWidth={2} dash={[8, 6]} />
-          )}
+          {gesture?.kind === "connector" && (() => {
+            const to = hitElement(elements, { x: gesture.x1, y: gesture.y1 }, gesture.fromId);
+            const preview = { from: { id: gesture.fromId, x: gesture.x0, y: gesture.y0 }, to: { id: to?.id, x: gesture.x1, y: gesture.y1 }, style: props.connectorStyle } as ConnectorElement;
+            const { points, bezier } = connectorPath(preview, byId);
+            return <Arrow points={points} bezier={bezier} stroke="#0f8573" fill="#0f8573" strokeWidth={2} dash={[8, 6]} />;
+          })()}
           {gesture?.kind === "pen" && (
             <Line points={gesture.points} stroke={gesture.highlight ? (penColor === "#111827" ? "#facc15" : penColor) : penColor}
-              strokeWidth={gesture.highlight ? 18 : 3} opacity={gesture.highlight ? 0.35 : 1} lineCap="round" lineJoin="round" tension={0.4} />
+              strokeWidth={penWidth} opacity={gesture.highlight ? 0.35 : 1} lineCap="round" lineJoin="round" tension={0.4} />
           )}
           {gesture?.kind === "line" && (
             <>

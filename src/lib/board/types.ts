@@ -21,7 +21,9 @@ export type ElementType =
   | "table"
   | "topic" // mind map node
   | "shape" // extra diagram shapes (triangle, cylinder, …)
-  | "embed"; // link / video / Figma etc.
+  | "embed" // link / video / Figma etc.
+  | "video" // uploaded video file
+  | "sticker"; // sticker art or a big emoji
 
 export interface BaseElement {
   id: string;
@@ -37,6 +39,8 @@ export interface BaseElement {
   text?: string;
   fontSize?: number;
   locked?: boolean;
+  /** 0–1; fully opaque when missing. */
+  opacity?: number;
   /** Set on elements created while private mode is on; others see them hidden until it ends. */
   privateOwner?: string;
 }
@@ -48,13 +52,16 @@ export interface ConnectorElement extends BaseElement {
   to: { id?: string; x: number; y: number };
   arrowEnd: boolean;
   arrowStart: boolean;
+  /** Line shape; straight when missing. */
+  style?: ConnectorStyle;
 }
+
+export type ConnectorStyle = "straight" | "curved" | "elbow";
 
 export interface PenElement extends BaseElement {
   type: "pen";
   points: number[]; // relative to x,y
   strokeWidth: number;
-  opacity?: number; // < 1 for the highlighter
 }
 
 /** Real-world scale of a plan: `metersPerPx` meters per world pixel when the element is `refWidth` wide. */
@@ -66,6 +73,27 @@ export interface ImageElement extends BaseElement {
   /** Set for imported plans (PDF pages or images). */
   plan?: { name: string; page?: number; /** width in PDF points (1/72 in) when imported from PDF */ paperWidthPt?: number };
   scale?: PlanScale;
+  /** Mirrored horizontally / vertically. */
+  /** Animated GIF: played on the board. */
+  animated?: boolean;
+  flipX?: boolean;
+  flipY?: boolean;
+  /** Visible part of the picture, as fractions (0–1) of its natural size. */
+  crop?: { x: number; y: number; width: number; height: number };
+}
+
+export interface StickerElement extends BaseElement {
+  type: "sticker";
+  /** Id from STICKER_PACKS, or an emoji character. */
+  sticker?: string;
+  emoji?: string;
+}
+
+export interface VideoElement extends BaseElement {
+  type: "video";
+  src: string;
+  name?: string;
+  mimeType?: string;
 }
 
 /** Dimension (2 points) or area (polygon) measurement; points are relative to x,y like pen strokes. */
@@ -115,7 +143,7 @@ export interface EmbedElement extends BaseElement {
 
 export type BoardElement =
   | BaseElement | ConnectorElement | PenElement | ImageElement | MeasureElement | SymbolElement
-  | CardElement | TableElement | TopicElement | ShapeElement | EmbedElement;
+  | CardElement | TableElement | TopicElement | ShapeElement | EmbedElement | VideoElement | StickerElement;
 
 export function hasPoints(el: BoardElement): el is PenElement | MeasureElement {
   return el.type === "pen" || el.type === "dimension" || el.type === "area";

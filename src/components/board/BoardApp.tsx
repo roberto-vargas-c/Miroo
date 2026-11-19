@@ -3,8 +3,8 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles } from "lucide-react";
-import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement } from "@/lib/board/types";
+import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse } from "lucide-react";
+import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
 import { unionRect, bounds as elBounds } from "./geometry";
@@ -15,9 +15,12 @@ import { LogoMark } from "@/components/Logo";
 import { Avatar } from "@/components/Avatar";
 import { useBoard, type Viewport, type PrivateMode } from "./useBoard";
 import { TimerWidget, VotePanel, PrivateModeButton, ReactionPicker, tallyVotes, type FloatingReaction } from "./Facilitation";
-import type { CanvasHandle, Tool } from "./Canvas";
+import type { CanvasHandle, Tool, WheelMode } from "./Canvas";
 import type { Camera } from "./geometry";
 import { Toolbar } from "./Toolbar";
+import { PenPalette } from "./PenPalette";
+import { CropDialog, applyCrop } from "./CropDialog";
+import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
@@ -65,6 +68,17 @@ export function BoardApp(p: BoardAppProps) {
   const [activeComment, setActiveComment] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
   const [penColor, setPenColor] = useState("#111827");
+  const [penWidth, setPenWidth] = useState(3);
+  const [wheelMode, setWheelMode] = useState<WheelMode>("auto");
+  useEffect(() => { try { const m = localStorage.getItem("schema.wheelMode"); if (m === "zoom" || m === "pan" || m === "auto") setWheelMode(m); } catch { /* ignore */ } }, []);
+  const cycleWheelMode = () => {
+    const next: WheelMode = wheelMode === "auto" ? "zoom" : wheelMode === "zoom" ? "pan" : "auto";
+    setWheelMode(next);
+    try { localStorage.setItem("schema.wheelMode", next); } catch { /* ignore */ }
+    setToast(`Scroll wheel: ${WHEEL_LABEL[next]}`);
+  };
+  const [highlightWidth, setHighlightWidth] = useState(18);
+  const [connectorStyle, setConnectorStyle] = useState<ConnectorStyle>("curved");
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<CanvasHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -316,9 +330,8 @@ export function BoardApp(p: BoardAppProps) {
   })();
 
   const uploadBlob = async (blob: Blob, name: string) => {
-    const fd = new FormData();
-    fd.append("file", new File([blob], name, { type: blob.type }));
-    const res = await fetch(`/api/boards/${p.boardId}/assets${q}`, { method: "POST", body: fd });
+    const type = blob.type || mediaTypeFromName(name);
+    const res = await fetch(`/api/boards/${p.boardId}/assets${q}`, { method: "POST", headers: { "content-type": type }, body: blob });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "Upload failed");
     return (await res.json()).url as string;
   };
@@ -374,6 +387,9 @@ export function BoardApp(p: BoardAppProps) {
   const [placingShape, setPlacingShape] = useState("triangle");
   const [embedDialog, setEmbedDialog] = useState<string | null>(null);
   const [viewing, setViewing] = useState<EmbedElement | null>(null);
+  const [playingVideo, setPlayingVideo] = useState<VideoElement | null>(null);
+  const [cropping, setCropping] = useState<string | null>(null);
+  const croppingEl = cropping ? (elements.find((e) => e.id === cropping) as ImageElement | undefined) : undefined;
   const addEmbed = useCallback(async (rawUrl: string, at?: { x: number; y: number }) => {
     let url = rawUrl.trim();
     if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
@@ -405,38 +421,141 @@ export function BoardApp(p: BoardAppProps) {
 
   // ── Images ──
   const q = p.shareToken ? `?share=${encodeURIComponent(p.shareToken)}` : "";
-  const addImageFile = useCallback(async (file: File, at?: { x: number; y: number }) => {
-    if (!file.type.startsWith("image/")) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch(`/api/boards/${p.boardId}/assets${q}`, { method: "POST", body: fd });
-    if (!res.ok) { setError((await res.json().catch(() => ({}))).error ?? "Upload failed"); return; }
-    const { url } = await res.json();
-    const img = new window.Image();
-    img.onload = () => {
-      const max = 480;
-      const k = Math.min(1, max / Math.max(img.width, img.height));
-      const w = img.width * k, h = img.height * k;
-      const c = at ?? canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
-      const el = makeElement("image", c.x - w / 2, c.y - h / 2, { width: w, height: h, fill: "transparent", stroke: "transparent" }) as ImageElement;
-      el.src = url;
-      api.add([el]);
-      setSelection([el.id]);
-    };
-    img.src = url;
+  /** Adds dropped, pasted or picked files: images (GIFs play), PDFs (one image per page) and videos. */
+  const addFiles = useCallback(async (list: File[], at?: { x: number; y: number }) => {
+    const files = list.filter((f) => kindOf(f) !== null);
+    const skipped = list.length - files.length;
+    if (!files.length) { if (skipped) setError("Drop images, PDFs or videos (MP4, WebM, MOV)"); return; }
+    const origin = at ?? canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    const created: BoardElement[] = [];
+    const failed: string[] = [];
+    // Each file's element, sized but not yet placed; laid out in rows once all are known.
+    const items: BoardElement[][] = [];
+    try {
+      for (const [i, f] of files.entries()) {
+        const tag = files.length > 1 ? ` ${i + 1}/${files.length}` : "";
+        try {
+          const kind = kindOf(f)!;
+          if (kind === "pdf") {
+            setImporting(`Reading PDF${tag}…`);
+            const { renderPdf } = await import("./pdfImport");
+            const pages = await renderPdf(f, (d, t) => setImporting(`Rendering page ${d}/${t}${tag}…`));
+            const name = f.name.replace(/\.[^.]+$/, "");
+            const els: BoardElement[] = [];
+            let x = 0;
+            for (const pg of pages) {
+              setImporting(`Uploading page ${pg.page}/${pages.length}${tag}…`);
+              const url = await uploadBlob(pg.blob, `${name}-p${pg.page}.png`);
+              const k = Math.min(1, 900 / Math.max(pg.widthPt, pg.heightPt));
+              const el = makeElement("image", x, 0, { width: pg.widthPt * k, height: pg.heightPt * k, fill: "transparent", stroke: "transparent" }) as ImageElement;
+              el.src = url;
+              el.plan = { name, page: pg.page, paperWidthPt: pg.widthPt };
+              els.push(el);
+              x += el.width + 40;
+            }
+            items.push(els);
+          } else if (kind === "video") {
+            setImporting(`Uploading video${tag}…`);
+            const url = await uploadBlob(f, f.name);
+            const size = await videoSize(url);
+            const k = Math.min(1, 560 / Math.max(size.w, size.h));
+            const el = makeElement("video", 0, 0, { width: size.w * k, height: size.h * k, fill: "transparent", stroke: "transparent" }) as VideoElement;
+            el.src = url;
+            el.name = f.name;
+            el.mimeType = f.type || mediaTypeFromName(f.name);
+            items.push([el]);
+          } else {
+            setImporting(`Uploading image${tag}…`);
+            const url = await uploadBlob(f, f.name);
+            const img = new window.Image();
+            await new Promise((r, j) => { img.onload = r; img.onerror = j; img.src = url; });
+            const k = Math.min(1, 480 / Math.max(img.width, img.height));
+            const el = makeElement("image", 0, 0, { width: img.width * k, height: img.height * k, fill: "transparent", stroke: "transparent" }) as ImageElement;
+            el.src = url;
+            if (f.type === "image/gif") el.animated = true;
+            items.push([el]);
+          }
+        } catch (e) {
+          failed.push(`${f.name}: ${e instanceof Error ? e.message : "upload failed"}`);
+        }
+      }
+      // Rows about as wide as they are tall, centered on the drop point.
+      const gap = 32;
+      const boxes = items.map((els) => unionRect(els.map(elBounds))!);
+      const totalArea = boxes.reduce((a, b) => a + (b.width + gap) * (b.height + gap), 0);
+      const rowMax = Math.max(Math.sqrt(totalArea) * 1.3, ...boxes.map((b) => b.width));
+      const rows: { idx: number[]; w: number; h: number }[] = [];
+      boxes.forEach((b, i) => {
+        let row = rows[rows.length - 1];
+        if (!row || row.w + b.width > rowMax) { row = { idx: [], w: 0, h: 0 }; rows.push(row); }
+        row.idx.push(i); row.w += b.width + gap; row.h = Math.max(row.h, b.height);
+      });
+      const totalH = rows.reduce((a, r) => a + r.h + gap, -gap);
+      let y = origin.y - totalH / 2;
+      const z = Date.now();
+      for (const row of rows) {
+        let x = origin.x - (row.w - gap) / 2;
+        for (const i of row.idx) {
+          const b = boxes[i];
+          for (const el of items[i]) created.push({ ...el, x: el.x - b.x + x, y: el.y - b.y + y, z: z + created.length });
+          x += b.width + gap;
+        }
+        y += row.h + gap;
+      }
+      if (created.length) {
+        api.add(created);
+        setSelection(created.map((e) => e.id));
+        const all = unionRect(created.map(elBounds));
+        if (all && canvasRef.current && created.length > 1) {
+          // Zoom out to show everything that was added, but never zoom in.
+          const cam = canvasRef.current.cameraFor(all, 80);
+          if (cam.scale < camera.scale) flyTo(cam);
+        }
+      }
+      if (failed.length) setError(`Couldn't add ${failed.join("; ")}`);
+      else if (skipped) setToast(`${skipped} file${skipped > 1 ? "s were" : " was"} skipped (only images, PDFs and videos can be added)`);
+    } finally {
+      setImporting(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, p.boardId, q, setSelection]);
+  // ── Stickers, emojis and GIFs ──
+  const [stickersOpen, setStickersOpen] = useState(false);
+  const gifInputRef = useRef<HTMLInputElement>(null);
+  const boardGifs = useMemo(() => Array.from(new Set(elements.filter((e) => e.type === "image" && (e as ImageElement).animated).map((e) => (e as ImageElement).src))), [elements]);
+  const addSticker = useCallback(async (pk: StickerPick, at?: { x: number; y: number }) => {
+    const c = at ?? canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    // A little random offset so repeated clicks don't stack exactly.
+    const j = at ? 0 : (Math.random() - 0.5) * 140;
+    let el: BoardElement;
+    if (pk.kind === "gif") {
+      const img = new window.Image();
+      await new Promise((r) => { img.onload = r; img.onerror = r; img.src = pk.id; });
+      const k = Math.min(1, 320 / Math.max(img.width || 320, img.height || 320));
+      const w = (img.width || 320) * k, h = (img.height || 320) * k;
+      el = makeElement("image", c.x - w / 2 + j, c.y - h / 2 + j, { width: w, height: h, fill: "transparent", stroke: "transparent" });
+      Object.assign(el, { src: pk.id, animated: true });
+    } else {
+      const size = pk.kind === "emoji" ? 120 : 180;
+      el = makeElement("sticker", c.x - size / 2 + j, c.y - size / 2 + j, { width: size, height: pk.kind === "emoji" ? size : size * (228 / 224), fill: "transparent", stroke: "transparent" });
+      Object.assign(el as StickerElement, pk.kind === "emoji" ? { emoji: pk.id } : { sticker: pk.id });
+    }
+    api.add([el]);
+    setSelection([el.id]);
+  }, [api, setSelection]);
+  const addImageFile = useCallback((f: File, at?: { x: number; y: number }) => addFiles([f], at), [addFiles]);
 
   useEffect(() => {
     if (!canEdit) return;
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
       if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
-      const f = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
-      if (f) { e.preventDefault(); addImageFile(f); }
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length) { e.preventDefault(); addFiles(files); }
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [canEdit, addImageFile]);
+  }, [canEdit, addFiles]);
 
   const duplicateSelected = () => {
     const src = selected.filter((s) => s.type !== "connector");
@@ -576,11 +695,19 @@ export function BoardApp(p: BoardAppProps) {
       onDrop={(e) => {
         if (!canEdit) return;
         e.preventDefault();
-        const f = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/"));
-        if (f) {
+        const files = Array.from(e.dataTransfer.files);
+        const sticker = e.dataTransfer.getData(STICKER_DRAG_TYPE);
+        if (sticker) {
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
           const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
-          addImageFile(f, { x: (sx - camera.x) / camera.scale, y: (sy - camera.y) / camera.scale });
+          try { addSticker(JSON.parse(sticker), { x: (sx - camera.x) / camera.scale, y: (sy - camera.y) / camera.scale }); } catch { /* not ours */ }
+        } else if (files.length) {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+          addFiles(files, { x: (sx - camera.x) / camera.scale, y: (sy - camera.y) / camera.scale });
+        } else {
+          const url = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain");
+          if (looksLikeUrl(url)) addEmbed(url);
         }
       }}>
       <Canvas
@@ -601,6 +728,10 @@ export function BoardApp(p: BoardAppProps) {
         camera={camera}
         setCamera={setCamera}
         penColor={penColor}
+        penWidth={tool === "highlighter" ? highlightWidth : penWidth}
+        connectorStyle={connectorStyle}
+        wheelMode={wheelMode}
+        onOpenVideo={(el) => setPlayingVideo(el)}
         boardScale={session.boardScale}
         unit={unit}
         placingSymbol={placingSymbol}
@@ -724,9 +855,15 @@ export function BoardApp(p: BoardAppProps) {
       </header>
 
       <Toolbar tool={tool} setTool={setTool} canEdit={canEdit} canComment={!!p.user} onImage={() => fileRef.current?.click()}
-        onEmbed={() => setEmbedDialog("")} placingShape={placingShape} setPlacingShape={setPlacingShape} />
-      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) addImageFile(f); e.target.value = ""; }} />
+        onEmbed={() => setEmbedDialog("")} placingShape={placingShape} setPlacingShape={setPlacingShape}
+        stickersOpen={stickersOpen} onStickers={() => setStickersOpen((o) => !o)} />
+      {canEdit && stickersOpen && (
+        <StickerPicker gifs={boardGifs} onPick={(pk) => addSticker(pk)} onUploadGif={() => gifInputRef.current?.click()} onClose={() => setStickersOpen(false)} />
+      )}
+      <input ref={gifInputRef} type="file" multiple accept="image/gif" hidden
+        onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = ""; }} />
+      <input ref={fileRef} type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.pdf,video/mp4,video/webm,video/quicktime,.mov,.mp4,.webm" hidden
+        onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = ""; }} />
 
       {canEdit && (
         <ArchToolbar tool={tool} setTool={setTool} onImportPlan={() => planInputRef.current?.click()} importing={importing}
@@ -737,9 +874,20 @@ export function BoardApp(p: BoardAppProps) {
         onChange={(e) => { const f = e.target.files?.[0]; if (f) importPlan(f); e.target.value = ""; }} />
 
       {(tool === "pen" || tool === "highlighter") && (
-        <div className="absolute left-16 top-1/2 z-10 ml-2 flex -translate-y-1/2 flex-col gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-          {["#111827", "#0f8573", "#2563eb", "#db2777", "#ea580c", "#ca8a04"].map((c) => (
-            <button key={c} onClick={() => setPenColor(c)} className={`h-6 w-6 rounded-full ${penColor === c ? "ring-2 ring-brand-500 ring-offset-1" : ""}`} style={{ background: c }} />
+        <PenPalette color={penColor} setColor={setPenColor} highlighter={tool === "highlighter"}
+          width={tool === "highlighter" ? highlightWidth : penWidth} setWidth={tool === "highlighter" ? setHighlightWidth : setPenWidth} />
+      )}
+      {tool === "connector" && (
+        <div className="absolute left-16 top-1/2 z-10 ml-2 flex -translate-y-1/2 flex-col gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+          {CONNECTOR_STYLES.map(([id, label, d]) => (
+            <button key={id} title={label} onClick={() => {
+              setConnectorStyle(id);
+              const conns = selected.filter((e) => e.type === "connector");
+              if (conns.length) api.updateMany(conns.map((c) => ({ id: c.id, patch: { style: id } as Partial<BoardElement> })));
+            }}
+              className={`flex h-9 w-9 items-center justify-center rounded-lg ${connectorStyle === id ? "bg-brand-600 text-white" : "text-slate-700 hover:bg-slate-100"}`}>
+              <svg width="22" height="22" viewBox="0 0 22 22"><path d={d} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
           ))}
         </div>
       )}
@@ -747,6 +895,7 @@ export function BoardApp(p: BoardAppProps) {
       {canEdit && <PropertiesBar selected={selected} all={elements} api={api} onDuplicate={duplicateSelected}
         onSetScale={selectedPlan ? () => setScaleDialog({ lengthPx: null, plan: selectedPlan }) : undefined}
         members={p.members}
+        onCrop={(el) => setCropping(el.id)}
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}
@@ -757,6 +906,10 @@ export function BoardApp(p: BoardAppProps) {
         </button>
         <button className="btn-ghost p-1.5" title="Zoom in" onClick={() => canvasRef.current?.zoomBy(1.2)}><Plus size={16} /></button>
         <button className="btn-ghost p-1.5" title="Fit to content" onClick={() => canvasRef.current?.fitContent()}><Maximize size={16} /></button>
+        <button className="btn-ghost p-1.5" onClick={cycleWheelMode}
+          title={`Scroll wheel: ${WHEEL_LABEL[wheelMode]}. Click to change. Pinch always zooms.`}>
+          {wheelMode === "pan" ? <Move size={16} /> : wheelMode === "zoom" ? <ZoomIn size={16} /> : <Mouse size={16} />}
+        </button>
         {canEdit && (
           <>
             <div className="mx-0.5 h-5 w-px bg-slate-200" />
@@ -767,6 +920,11 @@ export function BoardApp(p: BoardAppProps) {
       </div>
       </>}
 
+      {importing && (
+        <div className="absolute bottom-14 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-900 px-3 py-1.5 text-xs text-white">
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" /> {importing}
+        </div>
+      )}
       {!synced && status !== "connected" && (
         <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-slate-900 px-3 py-1.5 text-xs text-white">Connecting…</div>
       )}
@@ -834,6 +992,21 @@ export function BoardApp(p: BoardAppProps) {
           </form>
         </div>
       )}
+      {croppingEl && (
+        <CropDialog el={croppingEl} onClose={() => setCropping(null)}
+          onApply={(c) => { api.update(croppingEl.id, applyCrop(croppingEl, c) as Partial<BoardElement>); setCropping(null); }} />
+      )}
+      {playingVideo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4" onClick={() => setPlayingVideo(null)}>
+          <div className="w-full max-w-5xl space-y-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between text-white">
+              <span className="truncate font-medium">{playingVideo.name || "Video"}</span>
+              <button className="btn-ghost text-white hover:bg-white/10" onClick={() => setPlayingVideo(null)}><X size={16} /></button>
+            </div>
+            <video src={playingVideo.src} controls autoPlay playsInline className="max-h-[80vh] w-full rounded-lg bg-black" />
+          </div>
+        </div>
+      )}
       {viewing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4" onClick={() => setViewing(null)}>
           <div className="w-full max-w-4xl space-y-2" onClick={(e) => e.stopPropagation()}>
@@ -867,3 +1040,42 @@ function dedupePeers<T extends { name: string; color: string }>(peers: T[]) {
   const seen = new Set<string>();
   return peers.filter((x) => { const k = x.name + x.color; if (seen.has(k)) return false; seen.add(k); return true; });
 }
+
+const EXT_TYPES: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", pdf: "application/pdf",
+  mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime", ogv: "video/ogg",
+};
+function mediaTypeFromName(name: string) {
+  return EXT_TYPES[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
+}
+function kindOf(f: File): "image" | "pdf" | "video" | null {
+  const t = f.type || mediaTypeFromName(f.name);
+  if (t === "application/pdf") return "pdf";
+  if (["image/png", "image/jpeg", "image/gif", "image/webp"].includes(t)) return "image";
+  if (["video/mp4", "video/webm", "video/quicktime", "video/ogg"].includes(t)) return "video";
+  return null;
+}
+/** Natural size of an uploaded video (16:9 if the browser can't read it). */
+function videoSize(url: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    const done = (w: number, h: number) => { v.removeAttribute("src"); v.load(); resolve({ w, h }); };
+    const timer = setTimeout(() => done(640, 360), 8000);
+    v.preload = "metadata";
+    v.onloadedmetadata = () => { clearTimeout(timer); done(v.videoWidth || 640, v.videoHeight || 360); };
+    v.onerror = () => { clearTimeout(timer); done(640, 360); };
+    v.src = url;
+  });
+}
+
+const CONNECTOR_STYLES: [ConnectorStyle, string, string][] = [
+  ["straight", "Straight connector", "M4 18 L18 4"],
+  ["curved", "Curved connector", "M4 18 C12 18 10 4 18 4"],
+  ["elbow", "Angled connector", "M4 18 L11 18 L11 4 L18 4"],
+];
+
+const WHEEL_LABEL: Record<WheelMode, string> = {
+  auto: "mouse wheel zooms, trackpad scrolls",
+  zoom: "always zooms",
+  pan: "always scrolls (hold Ctrl or ⌘ to zoom)",
+};

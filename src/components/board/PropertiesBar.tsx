@@ -1,16 +1,20 @@
 "use client";
 
-import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight, Scale } from "lucide-react";
-import { STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement, type CardElement, type TableElement } from "@/lib/board/types";
+import { useState } from "react";
+import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight, Scale, FlipHorizontal2, FlipVertical2, Crop } from "lucide-react";
+import { STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement, type ConnectorStyle, type CardElement, type ImageElement, type TableElement } from "@/lib/board/types";
+import { ColorWheel } from "./ColorWheel";
 import { CARD_STATUS } from "./ElementNode";
 import type { BoardApi } from "./useBoard";
 
 export function PropertiesBar({
-  selected, all, api, onDuplicate, onDelete, onSetScale, members = [],
+  selected, all, api, onDuplicate, onDelete, onSetScale, onCrop, members = [],
 }: {
   selected: BoardElement[]; all: BoardElement[]; api: BoardApi; onDuplicate: () => void; onDelete: () => void; onSetScale?: () => void;
+  onCrop?: (el: ImageElement) => void;
   members?: { id: string; name: string; color: string }[];
 }) {
+  const [wheelFor, setWheelFor] = useState<"fill" | "stroke" | null>(null);
   if (!selected.length) return null;
   const types = new Set(selected.map((s) => s.type));
   const only = (t: BoardElement["type"]) => types.size === 1 && types.has(t);
@@ -28,19 +32,39 @@ export function PropertiesBar({
     <button key={c} onClick={onClick} className={`h-6 w-6 rounded-full border ${active ? "ring-2 ring-brand-500 ring-offset-1" : "border-slate-300"}`} style={{ background: c }} title={c} />
   );
   const first = selected[0];
+  const custom = (key: "fill" | "stroke", list: string[]) => {
+    const v = first[key];
+    const isCustom = v.startsWith("#") && !list.includes(v);
+    return (
+      <div className="relative">
+        <button title="More colors" onClick={() => setWheelFor((w) => (w === key ? null : key))}
+          className={`h-6 w-6 rounded-full border ${isCustom || wheelFor === key ? "ring-2 ring-brand-500 ring-offset-1" : "border-slate-300"}`}
+          style={{ background: isCustom ? v : "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }} />
+        {wheelFor === key && (
+          <div className="card absolute left-1/2 top-9 z-20 -translate-x-1/2 p-3">
+            <ColorWheel value={v.startsWith("#") ? v : "#111827"} onChange={(c) => setAll({ [key]: c })} />
+          </div>
+        )}
+      </div>
+    );
+  };
+  const STROKES = ["#111827", "#dc2626", "#0f8573", "#2563eb", "#db2777", "#ea580c"];
+  const images = selected.filter((s): s is ImageElement => s.type === "image");
 
   return (
     <div className="absolute left-1/2 top-16 z-10 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-lg">
       {showFill && (
         <div className="flex items-center gap-1" title="Fill">
           {fillColors.map((c) => sw(c, first.fill === c, () => setAll({ fill: c })))}
+          {custom("fill", fillColors)}
         </div>
       )}
       {showStroke && (
         <>
           <div className="h-6 w-px bg-slate-200" />
           <div className="flex items-center gap-1" title="Line / text color">
-            {["#111827", "#dc2626", "#0f8573", "#2563eb", "#db2777", "#ea580c"].map((c) => sw(c, first.stroke === c, () => setAll({ stroke: c })))}
+            {STROKES.map((c) => sw(c, first.stroke === c, () => setAll({ stroke: c })))}
+            {custom("stroke", STROKES)}
           </div>
         </>
       )}
@@ -93,6 +117,27 @@ export function PropertiesBar({
         );
       })()}
       {only("connector") && (
+        <div className="flex items-center gap-0.5">
+          {([["straight", "Straight", "M4 18 L18 4"], ["curved", "Curved", "M4 18 C12 18 10 4 18 4"], ["elbow", "Angled", "M4 18 L11 18 L11 4 L18 4"]] as [ConnectorStyle, string, string][]).map(([id, label, d]) => (
+            <button key={id} title={`${label} connector`} onClick={() => setAll({ style: id } as Partial<BoardElement>)}
+              className={`rounded-md p-1 ${((first as ConnectorElement).style ?? "straight") === id ? "bg-brand-50 text-brand-700 ring-1 ring-brand-500" : "hover:bg-slate-100"}`}>
+              <svg width="18" height="18" viewBox="0 0 22 22"><path d={d} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+          ))}
+        </div>
+      )}
+      {images.length > 0 && images.length === selected.length && (
+        <div className="flex items-center gap-0.5">
+          <button className="rounded-md p-1.5 hover:bg-slate-100" title="Mirror horizontally"
+            onClick={() => api.updateMany(images.map((i) => ({ id: i.id, patch: { flipX: !i.flipX } as Partial<BoardElement> })))}><FlipHorizontal2 size={16} /></button>
+          <button className="rounded-md p-1.5 hover:bg-slate-100" title="Mirror vertically"
+            onClick={() => api.updateMany(images.map((i) => ({ id: i.id, patch: { flipY: !i.flipY } as Partial<BoardElement> })))}><FlipVertical2 size={16} /></button>
+          {images.length === 1 && onCrop && (
+            <button className="rounded-md p-1.5 hover:bg-slate-100" title="Crop" onClick={() => onCrop(images[0])}><Crop size={16} /></button>
+          )}
+        </div>
+      )}
+      {only("connector") && (
         <button className="rounded-md p-1.5 hover:bg-slate-100" title="Arrow direction"
           onClick={() => {
             const c = first as ConnectorElement;
@@ -101,6 +146,15 @@ export function PropertiesBar({
           }}>
           <ArrowLeftRight size={16} />
         </button>
+      )}
+      {!only("connector") && (
+        <label className="flex items-center gap-1.5 text-xs text-slate-500" title="Transparency">
+          <span className="h-4 w-4 rounded-sm border border-slate-300" style={{ background: "repeating-conic-gradient(#cbd5e1 0 25%, #fff 0 50%) 50% / 8px 8px" }} />
+          <input type="range" min={5} max={100} step={5} className="w-20"
+            value={Math.round((first.opacity ?? 1) * 100)}
+            onChange={(e) => setAll({ opacity: Number(e.target.value) / 100 })} />
+          <span className="w-8 tabular-nums">{Math.round((first.opacity ?? 1) * 100)}%</span>
+        </label>
       )}
       {onSetScale && (
         <button className="flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-slate-100" title="Set this plan's real-world scale" onClick={onSetScale}>

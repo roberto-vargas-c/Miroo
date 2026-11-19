@@ -6,9 +6,14 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 ## Features (MVP)
 
 **Canvas**
-- Infinite canvas with pan (wheel, space+drag, hand tool, middle mouse) and zoom (Ctrl/⌘+wheel, pinch on trackpads, zoom controls, fit to content)
-- Sticky notes, rectangles, ellipses, diamonds, free text, freehand pen, images (upload, paste or drag and drop), frames
-- Connectors/arrows that attach to shapes and follow them when moved
+- Infinite canvas with pan (two-finger scroll, space+drag, hand tool, middle mouse) and zoom (mouse wheel, pinch on trackpads and iPad, zoom controls, fit to content). The wheel button next to the zoom controls switches the scroll wheel between auto, always zoom and always pan
+- Sticky notes, rectangles, ellipses, diamonds, free text, frames
+- Freehand pen and highlighter with 8 / 4 thicknesses, color swatches, a color wheel and an eyedropper (picks from anywhere on screen in Chrome and Edge, from the board elsewhere)
+- Drop, paste or upload many files at once: images, animated GIFs (they play on the board), PDFs (one image per page) and videos (MP4, WebM, MOV; play in place or full screen)
+- Images and PDF pages: mirror horizontally or vertically, crop (free or 1:1, 4:3, 16:9, 3:4)
+- Transparency for shapes, images, stickers and strokes
+- Stickers and emojis: a picker with original sticker packs (Feedback, Status, Celebrate, Studio), emojis, the board's GIFs and a Recent row; click or drag onto the board
+- Connectors/arrows that attach to shapes and follow them when moved: straight, curved or angled
 - Select, multi-select (shift-click, marquee), move, resize, rotate, lock, bring to front / send to back
 - Colors, font sizes, inline text editing (double-click)
 - Undo/redo, copy/paste, duplicate, delete, arrow-key nudge, keyboard shortcuts for every tool
@@ -137,6 +142,8 @@ Schema runs on Cloudflare Workers: the Next.js app through [OpenNext](https://op
    | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | secrets, optional | "Continue with Google" (redirect URI `<APP_URL>/api/auth/oidc/callback`) |
 
 6. Run **Actions → Deploy to Cloudflare → Run workflow**. A custom domain can be added afterwards under the Worker's Settings → Domains & Routes; set `APP_URL` to match.
+
+**Videos** are stored in an R2 bucket named `schema-media`, which the workflow creates and binds as `MEDIA` (R2 has to be enabled once on the account: dashboard → R2 → enable; free up to 10 GB). Without R2, uploads stay in Postgres and are limited to 25 MB; with it, up to 100 MB.
 
 **Email** goes through Cloudflare Email Sending (included in Workers Paid: 3,000 emails a month, then $0.35 per 1,000). Onboard the sending domain under Email Service → Email Sending, then set `EMAIL_FROM` in `wrangler.jsonc` to an address on it. This deployment sends from `no-reply@schema.robertovargas.dev`.
 
