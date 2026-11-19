@@ -8,7 +8,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { atLeast, boardAccessForUser, ROLE_RANK, workspaceRole } from "@/lib/permissions";
-import { initialBoardState } from "@/lib/board/doc";
+import { initialBoardState, stateFromElements } from "@/lib/board/doc";
+import type { BoardElement } from "@/lib/board/types";
 import { TEMPLATES, type TemplateId } from "@/lib/board/templates";
 
 export type ActionResult = { error?: string; ok?: boolean; link?: string } | undefined;
@@ -180,26 +181,114 @@ export async function removeTeamMember(teamMemberId: string) {
 
 export async function createBoard(workspaceId: string, form: FormData) {
   const { user } = await requireRole(workspaceId, "MEMBER");
-  const template = (String(form.get("template") ?? "blank") as TemplateId);
-  if (!TEMPLATES.some((t) => t.id === template)) throw new Error("Unknown template");
+  const template = String(form.get("template") ?? "blank");
+  let content: Uint8Array;
+  let defaultTitle: string;
+  if (template.startsWith("custom:")) {
+    const t = await db.boardTemplate.findFirst({ where: { id: template.slice(7), workspaceId } });
+    if (!t) throw new Error("Unknown template");
+    content = stateFromElements(t.elements as unknown as BoardElement[]);
+    defaultTitle = t.name;
+  } else {
+    const builtIn = TEMPLATES.find((t) => t.id === template);
+    if (!builtIn) throw new Error("Unknown template");
+    content = initialBoardState(template as TemplateId);
+    defaultTitle = builtIn.name;
+  }
   const teamId = String(form.get("teamId") ?? "") || null;
   if (teamId) {
     const team = await db.team.findFirst({ where: { id: teamId, workspaceId } });
     if (!team) throw new Error("Unknown team");
   }
-  const title = String(form.get("title") ?? "").trim() || TEMPLATES.find((t) => t.id === template)!.name;
+  const folderId = String(form.get("folderId") ?? "") || null;
+  if (folderId && !(await db.folder.findFirst({ where: { id: folderId, workspaceId } }))) throw new Error("Unknown folder");
+  const title = String(form.get("title") ?? "").trim() || defaultTitle;
   const board = await db.board.create({
     data: {
       workspaceId,
       teamId,
+      folderId,
       title: title.slice(0, 120),
       createdById: user.id,
       visibility: teamId ? "TEAM" : "WORKSPACE",
       shareToken: token(),
-      content: Buffer.from(initialBoardState(template)),
+      content: Buffer.from(content),
     },
   });
   redirect(`/board/${board.id}`);
+}
+
+// ── Folders ─────────────────────────────────────────────────────────────────
+
+export async function createFolder(workspaceId: string, form: FormData) {
+  await requireRole(workspaceId, "MEMBER");
+  const f = await db.folder.create({ data: { workspaceId, name: name.parse(form.get("name")) } });
+  redirect(`/w/${workspaceId}?folder=${f.id}`);
+}
+
+export async function renameFolder(folderId: string, form: FormData) {
+  const folder = await db.folder.findUniqueOrThrow({ where: { id: folderId } });
+  await requireRole(folder.workspaceId, "MEMBER");
+  await db.folder.update({ where: { id: folderId }, data: { name: name.parse(form.get("name")) } });
+  revalidatePath(`/w/${folder.workspaceId}`);
+}
+
+/** Deleting a folder keeps its boards; they move back to "no folder". */
+export async function deleteFolder(folderId: string) {
+  const folder = await db.folder.findUniqueOrThrow({ where: { id: folderId } });
+  await requireRole(folder.workspaceId, "ADMIN");
+  await db.folder.delete({ where: { id: folderId } });
+  redirect(`/w/${folder.workspaceId}`);
+}
+
+export async function moveBoardToFolder(boardId: string, form: FormData) {
+  const { board } = await requireBoardManager(boardId);
+  const folderId = String(form.get("folderId") ?? "") || null;
+  if (folderId && !(await db.folder.findFirst({ where: { id: folderId, workspaceId: board.workspaceId } }))) throw new Error("Unknown folder");
+  await db.board.update({ where: { id: boardId }, data: { folderId } });
+  revalidatePath(`/w/${board.workspaceId}`);
+}
+
+// ── Custom templates ────────────────────────────────────────────────────────
+
+const MAX_TEMPLATE_BYTES = 5 * 1024 * 1024;
+
+/** Save a board's current elements (sent by the editor, which has the latest state) as a workspace template. */
+export async function saveBoardAsTemplate(boardId: string, input: { name: string; description: string; elements: string }): Promise<ActionResult> {
+  const user = await requireUser();
+  const board = await db.board.findUniqueOrThrow({ where: { id: boardId } });
+  if (!(await boardAccessForUser(user.id, board)).canEdit) return { error: "You need edit access to this board" };
+  if (!atLeast(await workspaceRole(user.id, board.workspaceId), "MEMBER")) return { error: "Only workspace members can add templates" };
+  const n = name.safeParse(input.name);
+  if (!n.success) return { error: "Give the template a name" };
+  if (input.elements.length > MAX_TEMPLATE_BYTES) return { error: "This board is too large to save as a template" };
+  let elements: BoardElement[];
+  try {
+    const parsed = JSON.parse(input.elements);
+    if (!Array.isArray(parsed) || !parsed.every((e) => e && typeof e.id === "string" && typeof e.type === "string")) throw new Error();
+    elements = parsed;
+  } catch {
+    return { error: "Couldn't read the board" };
+  }
+  // Private notes and votes are personal; don't carry them into a template.
+  elements = elements.filter((e) => !e.privateOwner);
+  await db.boardTemplate.create({
+    data: {
+      workspaceId: board.workspaceId, name: n.data, description: input.description.trim().slice(0, 200),
+      elements: elements as unknown as object, createdById: user.id,
+    },
+  });
+  revalidatePath(`/w/${board.workspaceId}`);
+  return { ok: true };
+}
+
+export async function deleteTemplate(templateId: string) {
+  const user = await requireUser();
+  const t = await db.boardTemplate.findUniqueOrThrow({ where: { id: templateId } });
+  const role = await workspaceRole(user.id, t.workspaceId);
+  if (t.createdById !== user.id && !atLeast(role, "ADMIN")) throw new Error("Only the author or an admin can delete a template");
+  await db.boardTemplate.delete({ where: { id: templateId } });
+  revalidatePath(`/w/${t.workspaceId}`);
 }
 
 async function requireBoardManager(boardId: string) {

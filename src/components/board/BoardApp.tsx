@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, Download, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X } from "lucide-react";
+import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X } from "lucide-react";
 import { makeElement, type BoardElement, type ImageElement, type EmbedElement } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
@@ -21,6 +21,7 @@ import { Toolbar } from "./Toolbar";
 import { PropertiesBar } from "./PropertiesBar";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
+import { BoardMenu, CsvDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
 
 const Canvas = dynamic(() => import("./Canvas").then((m) => m.Canvas), { ssr: false });
 
@@ -40,8 +41,15 @@ export type BoardAppProps = {
 };
 
 export function BoardApp(p: BoardAppProps) {
-  const { elements, peers, status, synced, me, api: rawApi, session, votes } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
-  const canEdit = p.canEdit && (me?.canEdit ?? p.canEdit);
+  const { elements: liveElements, peers, status, synced, me, api: rawApi, session, votes } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
+  // Version history preview: show a saved version read-only instead of the live board.
+  const [preview, setPreview] = useState<{ id: string; label: string; elements: BoardElement[] } | null>(null);
+  const elements = preview?.elements ?? liveElements;
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [dialog, setDialog] = useState<"csv" | "template" | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const canEditBoard = p.canEdit && (me?.canEdit ?? p.canEdit);
+  const canEdit = canEditBoard && !preview;
   const [tool, setTool] = useState<Tool>("select");
   const [selection, setSelectionState] = useState<string[]>([]);
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, scale: 1 });
@@ -432,13 +440,48 @@ export function BoardApp(p: BoardAppProps) {
     setSelection(copies.map((c) => c.id));
   };
 
-  const exportPng = () => {
-    const url = canvasRef.current?.exportPng();
-    if (!url) return;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${title || "board"}.png`;
-    a.click();
+  const exportBoard = async (kind: ExportKind) => {
+    const c = canvasRef.current;
+    if (!c || exporting) return;
+    const sel = selected.length ? unionRect(selected.map(elBounds)) : null;
+    const selRect = sel ? { x: sel.x - 24, y: sel.y - 24, width: sel.width + 48, height: sel.height + 48 } : undefined;
+    const name = (title || "board").replace(/[\\/:*?"<>|]+/g, "-");
+    setExporting(true);
+    setToast(kind.startsWith("pdf") ? "Preparing the PDF…" : "Preparing the image…");
+    try {
+      await new Promise((r) => setTimeout(r, 30)); // let the toast paint before the heavy render
+      if (kind === "png" || kind === "png-hi") {
+        const img = c.exportImage({ rect: selRect, pixelsPerUnit: kind === "png-hi" ? 4 : 2 });
+        if (!img) { setToast("The board is empty."); return; }
+        const a = document.createElement("a");
+        a.href = img.url;
+        a.download = `${name}.png`;
+        a.click();
+        setToast(null);
+        return;
+      }
+      // PDF pages are sized in points at 1 board unit = 1 pt, so a plan imported from a PDF keeps its paper size and scale.
+      const rects = kind === "pdf-frames" ? frames.map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height })) : [selRect];
+      const { jsPDF } = await import("jspdf");
+      let pdf: InstanceType<typeof jsPDF> | null = null;
+      for (const rect of rects) {
+        const img = c.exportImage({ rect, pixelsPerUnit: 3 });
+        if (!img) continue;
+        const f = Math.min(1, 14400 / Math.max(img.rect.width, img.rect.height));
+        const w = img.rect.width * f, h = img.rect.height * f;
+        const orientation = w > h ? "landscape" : "portrait";
+        if (!pdf) pdf = new jsPDF({ unit: "pt", format: [w, h], orientation, compress: true });
+        else pdf.addPage([w, h], orientation);
+        pdf.addImage(img.url, "PNG", 0, 0, w, h, undefined, "FAST");
+      }
+      if (!pdf) { setToast("The board is empty."); return; }
+      pdf.save(`${name}.pdf`);
+      setToast(null);
+    } catch (e) {
+      setToast(e instanceof Error ? `Export failed: ${e.message}` : "Export failed");
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (status === "denied") {
@@ -571,7 +614,7 @@ export function BoardApp(p: BoardAppProps) {
           <ReactionPicker onReact={react} />
           <PrivateModeButton mode={session.privateMode} canEdit={canEdit} me={me?.id ?? ""} onChange={setPrivateMode} />
           <button className={`btn-ghost p-1.5 ${voteOpen || vote?.open ? "bg-slate-100" : ""} ${vote?.open ? "text-brand-700" : ""}`} title="Voting"
-            onClick={() => { setVoteOpen((o) => !o); setCommentsOpen(false); }}>
+            onClick={() => { setVoteOpen((o) => !o); setCommentsOpen(false); setHistoryOpen(false); }}>
             <Vote size={18} />
           </button>
           <div className="relative">
@@ -584,10 +627,17 @@ export function BoardApp(p: BoardAppProps) {
               </div>
             )}
           </div>
-          <button className={`btn-ghost p-1.5 ${commentsOpen ? "bg-slate-100" : ""}`} title="Comments" onClick={() => { setCommentsOpen((o) => !o); setVoteOpen(false); }}>
+          <button className={`btn-ghost p-1.5 ${commentsOpen ? "bg-slate-100" : ""}`} title="Comments" onClick={() => { setCommentsOpen((o) => !o); setVoteOpen(false); setHistoryOpen(false); }}>
             <MessageSquare size={18} />
           </button>
-          <button className="btn-ghost p-1.5" title="Export PNG" onClick={exportPng}><Download size={18} /></button>
+          {canEditBoard && (
+            <button className={`btn-ghost p-1.5 ${historyOpen ? "bg-slate-100" : ""}`} title="Version history"
+              onClick={() => { setHistoryOpen((o) => !o); setCommentsOpen(false); setVoteOpen(false); }}>
+              <History size={18} />
+            </button>
+          )}
+          <BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onSaveTemplate={() => setDialog("template")}
+            canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0} />
           {p.sharing && <button className="btn-primary py-1.5" onClick={() => setShareOpen(true)}><Share2 size={16} /> Share</button>}
         </div>
       </header>
@@ -650,7 +700,32 @@ export function BoardApp(p: BoardAppProps) {
           onFocus={(c) => setCamera((cam) => ({ ...cam, x: window.innerWidth / 2 - c.x * cam.scale, y: window.innerHeight / 2 - c.y * cam.scale }))} />
       )}
 
-      {voteOpen && !commentsOpen && !presenting && (
+      {preview && (
+        <div className="absolute left-1/2 top-16 z-[35] flex -translate-x-1/2 items-center gap-3 rounded-full bg-ink px-4 py-2 text-sm text-white shadow-lg">
+          <History size={15} /> Viewing: {preview.label}
+          <button className="rounded-full bg-white/15 px-3 py-0.5 hover:bg-white/25" onClick={() => setPreview(null)}>Back to the live board</button>
+        </div>
+      )}
+      {historyOpen && canEditBoard && !presenting && (
+        <VersionPanel boardId={p.boardId} q={q} api={rawApi} previewing={preview?.id ?? null}
+          onPreview={(v) => { setSelection([]); setPreview(v); if (v) requestAnimationFrame(() => canvasRef.current?.fitContent()); }}
+          onRestored={(msg) => setToast(msg)}
+          onClose={() => { setHistoryOpen(false); setPreview(null); }} />
+      )}
+      {dialog === "csv" && canEdit && (
+        <CsvDialog at={canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 }} members={p.members} onClose={() => setDialog(null)}
+          onImport={(els) => {
+            api.add(els);
+            setSelection(els.map((e) => e.id));
+            setDialog(null);
+            setToast(`Added ${els.length === 1 && els[0].type === "table" ? "a table" : `${els.length} items`} from the CSV.`);
+          }} />
+      )}
+      {dialog === "template" && (
+        <TemplateDialog boardId={p.boardId} title={title} elements={liveElements} onClose={() => setDialog(null)}
+          onDone={(msg) => { setDialog(null); setToast(msg); }} />
+      )}
+      {voteOpen && !commentsOpen && !historyOpen && !presenting && (
         <VotePanel vote={vote} votes={votes} myVotes={myVotes} canEdit={canEdit} me={me?.name ?? ""} elements={elements}
           onStart={(v) => { api.setSession("vote", v); setSelection([]); }}
           onEnd={() => vote && api.setSession("vote", { ...vote, open: false })}

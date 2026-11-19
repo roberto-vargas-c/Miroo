@@ -135,6 +135,19 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
           });
         });
       },
+      /** Replace every element at once (restoring a version). Undoable like any other edit. */
+      replaceAll(els: BoardElement[]) {
+        transact(() => {
+          const keep = new Set(els.map((e) => e.id));
+          Array.from(map.keys()).forEach((id) => { if (!keep.has(id)) map.delete(id); });
+          els.forEach((e) => {
+            const cur = map.get(e.id);
+            if (!cur || JSON.stringify(cur) !== JSON.stringify(e)) map.set(e.id, e);
+          });
+        });
+      },
+      /** The whole document, encoded, e.g. to save a named version. */
+      encodeState: () => Y.encodeStateAsUpdate(doc),
       get: (id: string) => map.get(id),
       undo: () => undo.undo(),
       redo: () => undo.redo(),

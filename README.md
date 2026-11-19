@@ -22,6 +22,12 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Diagram shapes: triangle, hexagon, pentagon, parallelogram, trapezoid, database, star, block arrow, chevron, speech bubble, document, cross
 - Embeds: paste or add any link to get a preview card; YouTube, Vimeo, Loom and Figma open inline
 
+**Export, import & history**
+- Export the board or the selection as PNG (standard or high resolution) or PDF
+- Export frames as PDF pages, one per frame, sized 1 board unit = 1 pt, so plans imported from a PDF print at their original paper size and scale
+- Import a CSV (or TSV) as sticky notes, task cards (reads title, status, assignee and due date columns) or a table
+- Version history: an automatic snapshot every 10 minutes of editing, named versions, preview any version, restore it (the current board is saved first, and the restore can be undone)
+
 **Collaboration**
 - Real-time multi-user editing (Yjs CRDT over WebSockets), saved to Postgres
 - Live cursors with names, presence avatars, and highlights of what others have selected
@@ -51,6 +57,8 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Invite links with a role, pending invite list, revoke
 - Teams inside a workspace, with leads and members
 - Board visibility: whole workspace, a team only, or private; plus "anyone with the link can view / edit" share links
+- Folders to group a workspace's boards by project
+- Custom templates: save any board as a template for the whole workspace
 - Starred boards, filter by team, search
 
 ## Stack
@@ -101,6 +109,7 @@ Browser ──HTTP──▶ Next.js (pages, server actions, /api/*) ──▶ Po
 - Google / SSO sign-in and password reset
 - Sending invite emails (invites are links you copy for now)
 - Touch pinch-zoom on phones and tablets
-- Board version history, board thumbnails, more templates
+- Board thumbnails
+- Templates keep image links to the board they came from; deleting that board removes those images
 - Automated tests and CI
 - Image storage in object storage (S3/R2) instead of Postgres

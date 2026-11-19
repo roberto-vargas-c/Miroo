@@ -20,6 +20,9 @@ import { verifyRealtime, type RealtimeClaims } from "../src/lib/token";
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
 const SAVE_DEBOUNCE_MS = 1500;
+/** Keep an automatic version at most this often while a board is being edited. */
+const VERSION_EVERY_MS = 10 * 60 * 1000;
+const MAX_AUTO_VERSIONS = 200;
 
 const prisma = new PrismaClient();
 
@@ -31,6 +34,7 @@ class Room {
   conns = new Map<WebSocket, Conn>();
   saveTimer: NodeJS.Timeout | null = null;
   dirty = false;
+  lastVersionAt = 0;
 
   constructor(public boardId: string) {
     this.awareness.setLocalState(null);
@@ -59,6 +63,8 @@ class Room {
   async load() {
     const board = await prisma.board.findUnique({ where: { id: this.boardId }, select: { content: true } });
     if (board?.content) Y.applyUpdate(this.doc, new Uint8Array(board.content), "load");
+    const last = await prisma.boardVersion.findFirst({ where: { boardId: this.boardId }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+    this.lastVersionAt = last?.createdAt.getTime() ?? 0;
     this.dirty = false;
   }
 
@@ -75,10 +81,23 @@ class Room {
     const state = Buffer.from(Y.encodeStateAsUpdate(this.doc));
     try {
       await prisma.board.update({ where: { id: this.boardId }, data: { content: state } });
+      if (Date.now() - this.lastVersionAt >= VERSION_EVERY_MS) await this.snapshot(state);
     } catch (e) {
       console.error(`[realtime] failed to save board ${this.boardId}`, e);
       this.dirty = true;
     }
+  }
+
+  /** Automatic version history: one snapshot per VERSION_EVERY_MS of editing, oldest pruned. */
+  async snapshot(state: Buffer) {
+    this.lastVersionAt = Date.now();
+    await prisma.boardVersion.create({
+      data: { boardId: this.boardId, content: new Uint8Array(state), auto: true, elementCount: this.doc.getMap("elements").size },
+    });
+    const stale = await prisma.boardVersion.findMany({
+      where: { boardId: this.boardId, auto: true }, orderBy: { createdAt: "desc" }, skip: MAX_AUTO_VERSIONS, select: { id: true },
+    });
+    if (stale.length) await prisma.boardVersion.deleteMany({ where: { id: { in: stale.map((v) => v.id) } } });
   }
 
   broadcast(msg: Uint8Array, except?: WebSocket) {
