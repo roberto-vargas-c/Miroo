@@ -1,7 +1,7 @@
-# Miroo
+# Schema
 
-A collaborative online whiteboard with workspaces and teams. "Miroo" is a working codename; the product
-name lives in `src/lib/brand.ts`.
+A collaborative online whiteboard for architecture teams, with workspaces and teams. The product name lives in
+`src/lib/brand.ts`.
 
 ## Features (MVP)
 
@@ -20,6 +20,14 @@ name lives in `src/lib/brand.ts`.
 - Live cursors with names, presence avatars, and highlights of what others have selected
 - Comments pinned to the canvas, with replies and resolve
 - Board templates: Kanban, Retrospective, Brainstorm, Flowchart
+
+**Facilitation & presenting**
+- Shared timer with pause, +1 minute and an alarm
+- Voting sessions: set votes per person, optionally hide results until the end, ranked results
+- Private mode: new notes stay face-down for everyone else until the facilitator reveals them
+- Follow a collaborator's view (click their avatar), or bring everyone to your view
+- Emoji reactions that float up on everyone's screen
+- Presentation mode: frames become slides in reading order; "present to everyone" makes others follow along
 
 **Workspaces & teams**
 - Accounts (email + password)

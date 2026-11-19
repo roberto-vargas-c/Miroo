@@ -3,12 +3,13 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Download, Maximize, MessageSquare, Minus, Plus, Share2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X } from "lucide-react";
 import { makeElement, type BoardElement, type ImageElement } from "@/lib/board/types";
 import { renameBoard } from "@/app/actions/workspace";
 import { LogoMark } from "@/components/Logo";
 import { Avatar } from "@/components/Avatar";
-import { useBoard } from "./useBoard";
+import { useBoard, type Viewport, type PrivateMode } from "./useBoard";
+import { TimerWidget, VotePanel, PrivateModeButton, ReactionPicker, tallyVotes, type FloatingReaction } from "./Facilitation";
 import type { CanvasHandle, Tool } from "./Canvas";
 import type { Camera } from "./geometry";
 import { Toolbar } from "./Toolbar";
@@ -32,7 +33,7 @@ export type BoardAppProps = {
 };
 
 export function BoardApp(p: BoardAppProps) {
-  const { elements, peers, status, synced, me, api } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
+  const { elements, peers, status, synced, me, api: rawApi, session, votes } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
   const canEdit = p.canEdit && (me?.canEdit ?? p.canEdit);
   const [tool, setTool] = useState<Tool>("select");
   const [selection, setSelectionState] = useState<string[]>([]);
@@ -49,7 +50,202 @@ export function BoardApp(p: BoardAppProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const comments = useComments(p.boardId, p.shareToken);
 
-  const setSelection = useCallback((ids: string[]) => { setSelectionState(ids); api.setSelection(ids); }, [api]);
+  // Private mode: tag notes created while it's on so others see them face-down until it ends.
+  const privateOn = !!session.privateMode?.on;
+  const api = useMemo(() => (privateOn && me
+    ? { ...rawApi, add: (els: BoardElement[]) => rawApi.add(els.map((e) => ({ ...e, privateOwner: me.id }))) }
+    : rawApi), [rawApi, privateOn, me]);
+  const hiddenIds = useMemo(() => (privateOn
+    ? new Set(elements.filter((e) => e.privateOwner && e.privateOwner !== me?.id).map((e) => e.id))
+    : undefined), [privateOn, elements, me?.id]);
+  const setPrivateMode = (m: PrivateMode) => {
+    if (!m) {
+      // Reveal: clear the private flag so turning the mode on again later doesn't re-hide old notes.
+      api.updateMany(elements.filter((e) => e.privateOwner).map((e) => ({ id: e.id, patch: { privateOwner: "" } })));
+    }
+    api.setSession("privateMode", m);
+  };
+
+  const setSelection = useCallback((ids: string[]) => { setSelectionState(ids); rawApi.setSelection(ids); }, [rawApi]);
+
+  // ── Camera animation ──
+  const cameraRef = useRef(camera);
+  cameraRef.current = camera;
+  const anim = useRef<number | null>(null);
+  const flyTo = useCallback((target: Camera, ms = 450) => {
+    if (anim.current) cancelAnimationFrame(anim.current);
+    const from = cameraRef.current;
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / ms);
+      const e = 1 - Math.pow(1 - k, 3);
+      // Interpolate zoom in log space so it feels even.
+      const scale = Math.exp(Math.log(from.scale) + (Math.log(target.scale) - Math.log(from.scale)) * e);
+      setCamera({ scale, x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e });
+      if (k < 1) anim.current = requestAnimationFrame(step);
+      else anim.current = null;
+    };
+    anim.current = requestAnimationFrame(step);
+  }, []);
+  const screenSize = () => canvasRef.current?.size() ?? { width: window.innerWidth, height: window.innerHeight };
+  const cameraForViewport = useCallback((vp: Viewport): Camera => {
+    const sz = canvasRef.current?.size() ?? { width: window.innerWidth, height: window.innerHeight };
+    return { scale: vp.scale, x: sz.width / 2 - vp.cx * vp.scale, y: sz.height / 2 - vp.cy * vp.scale };
+  }, []);
+  const myViewport = (): Viewport => {
+    const sz = screenSize();
+    return { cx: (sz.width / 2 - camera.x) / camera.scale, cy: (sz.height / 2 - camera.y) / camera.scale, scale: camera.scale };
+  };
+
+  // Broadcast my viewport (others use it to follow me).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const sz = canvasRef.current?.size();
+      if (sz) rawApi.setPresence("viewport", { cx: (sz.width / 2 - camera.x) / camera.scale, cy: (sz.height / 2 - camera.y) / camera.scale, scale: camera.scale });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [camera, rawApi]);
+
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // ── Follow ──
+  const [following, setFollowing] = useState<number | null>(null);
+  const [optedOutOf, setOptedOutOf] = useState<number | null>(null);
+  const followed = following === null ? undefined : peers.find((x) => x.clientId === following);
+  useEffect(() => { if (following !== null && !followed) setFollowing(null); }, [following, followed]);
+  const fvp = followed?.viewport;
+  useEffect(() => { if (fvp) flyTo(cameraForViewport(fvp), 220); }, [fvp?.cx, fvp?.cy, fvp?.scale, flyTo, cameraForViewport]); // eslint-disable-line react-hooks/exhaustive-deps
+  const followedPresenting = !!followed?.presenting;
+  const stopFollowing = useCallback(() => {
+    // Only remember the opt-out when leaving someone's presentation, so it doesn't restart.
+    setFollowing((f) => { if (f !== null && followedPresenting) setOptedOutOf(f); return null; });
+  }, [followedPresenting]);
+
+  // ── Summon ("bring everyone to me") and reactions from others ──
+  const seenSummon = useRef(new Map<number, number>());
+  const seenReaction = useRef(new Map<number, number>());
+  const [floating, setFloating] = useState<FloatingReaction[]>([]);
+  const addFloating = useCallback((r: Omit<FloatingReaction, "key">) => {
+    const key = Math.random().toString(36).slice(2);
+    setFloating((f) => [...f.slice(-30), { ...r, key }]);
+    setTimeout(() => setFloating((f) => f.filter((x) => x.key !== key)), 2600);
+  }, []);
+  useEffect(() => {
+    for (const peer of peers) {
+      const st = peer.summon?.t;
+      if (st) {
+        const seen = seenSummon.current.get(peer.clientId);
+        seenSummon.current.set(peer.clientId, st);
+        const fresh = seen === undefined ? Date.now() - st < 5000 : seen !== st;
+        if (fresh && peer.summon) {
+          setFollowing(null);
+          flyTo(cameraForViewport(peer.summon.viewport));
+          setToast(`${peer.name} brought everyone to their view`);
+        }
+      }
+      const r = peer.reaction;
+      if (r) {
+        const seen = seenReaction.current.get(peer.clientId);
+        seenReaction.current.set(peer.clientId, r.t);
+        const fresh = seen === undefined ? Date.now() - r.t < 3000 : seen !== r.t;
+        if (fresh) addFloating({ emoji: r.emoji, x: r.x, y: r.y, color: peer.color });
+      }
+    }
+  }, [peers, flyTo, cameraForViewport, addFloating]);
+
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const mv = (e: PointerEvent) => { lastPointer.current = { x: e.clientX, y: e.clientY }; };
+    window.addEventListener("pointermove", mv);
+    return () => window.removeEventListener("pointermove", mv);
+  }, []);
+  const react = (emoji: string) => {
+    const sz = screenSize();
+    const sp = lastPointer.current && lastPointer.current.y > 70 ? lastPointer.current : { x: sz.width / 2 + (Math.random() - 0.5) * 200, y: sz.height * 0.7 };
+    const w = { x: (sp.x - camera.x) / camera.scale, y: (sp.y - camera.y) / camera.scale };
+    rawApi.setPresence("reaction", { emoji, ...w, t: Date.now() });
+    addFloating({ emoji, ...w, color: me?.color ?? "#0f8573" });
+  };
+  const summonEveryone = () => {
+    rawApi.setPresence("summon", { t: Date.now(), viewport: myViewport() });
+    setToast("Everyone has been brought to your view");
+  };
+
+  // ── Voting ──
+  const vote = session.vote;
+  const [voteOpen, setVoteOpen] = useState(false);
+  const lastVoteId = useRef<string | null>(null);
+  useEffect(() => {
+    // Open the panel for everyone when a new vote starts.
+    if (vote?.id && vote.id !== lastVoteId.current) {
+      if (lastVoteId.current !== null || vote.open) setVoteOpen(true);
+      lastVoteId.current = vote.id;
+    }
+  }, [vote?.id, vote?.open]);
+  const voteKey = vote && me ? `${vote.id}|${me.id}` : null;
+  const myVotes = useMemo(() => (voteKey ? votes.get(voteKey) ?? [] : []), [votes, voteKey]);
+  const castVote = vote?.open && canEdit && voteKey
+    ? (id: string) => {
+        if (myVotes.includes(id)) rawApi.setVotes(voteKey, myVotes.filter((x) => x !== id));
+        else if (myVotes.length < vote.votesPerUser) rawApi.setVotes(voteKey, [...myVotes, id]);
+        else setToast("You've used all your votes. Click one of your votes to take it back.");
+      }
+    : undefined;
+  const badges = useMemo(() => {
+    if (!vote) return undefined;
+    const { counts } = tallyVotes(votes, vote.id);
+    const showAll = !vote.open || !vote.anonymous;
+    const m = new Map<string, { count: number; mine: number }>();
+    const ids = new Set([...myVotes, ...(showAll ? counts.keys() : [])]);
+    ids.forEach((id) => m.set(id, { count: showAll ? counts.get(id) ?? 0 : 0, mine: myVotes.includes(id) ? 1 : 0 }));
+    return m;
+  }, [vote, votes, myVotes]);
+
+  // ── Presentation (frames as slides) ──
+  const frames = useMemo(() => elements.filter((e) => e.type === "frame").sort((a, b) =>
+    Math.abs(a.y - b.y) < Math.min(a.height, b.height) / 2 ? a.x - b.x : a.y - b.y), [elements]);
+  const [slide, setSlide] = useState<number | null>(null);
+  const presenting = slide !== null;
+  const startPresenting = (toEveryone: boolean) => {
+    if (!frames.length) { setToast("Add frames to the board first. Each frame becomes a slide."); return; }
+    setSelection([]);
+    setCommentsOpen(false);
+    setVoteOpen(false);
+    setFollowing(null);
+    setSlide(0);
+    if (toEveryone) rawApi.setPresence("presenting", true);
+  };
+  const stopPresenting = useCallback(() => { setSlide(null); rawApi.setPresence("presenting", false); }, [rawApi]);
+  const current = slide !== null ? frames[Math.min(slide, frames.length - 1)] : undefined;
+  useEffect(() => {
+    if (!current || !canvasRef.current) return;
+    flyTo(canvasRef.current.cameraFor({ x: current.x, y: current.y - 34, width: current.width, height: current.height + 34 }, 48));
+  }, [current?.id, current?.x, current?.y, current?.width, current?.height, flyTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!presenting) return;
+    const key = (e: KeyboardEvent) => {
+      if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(e.key)) { e.preventDefault(); e.stopPropagation(); setSlide((s) => Math.min((s ?? 0) + 1, frames.length - 1)); }
+      if (["ArrowLeft", "ArrowUp", "PageUp"].includes(e.key)) { e.preventDefault(); e.stopPropagation(); setSlide((s) => Math.max((s ?? 0) - 1, 0)); }
+      if (e.key === "Escape") stopPresenting();
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [presenting, frames.length, stopPresenting]);
+  // Auto-follow someone who presents to everyone.
+  const presenter = peers.find((x) => x.presenting);
+  useEffect(() => {
+    if (presenter && !presenting && optedOutOf !== presenter.clientId && following !== presenter.clientId) {
+      setFollowing(presenter.clientId);
+      setToast(`${presenter.name} is presenting. You're following along.`);
+    }
+    if (!presenter && optedOutOf !== null) setOptedOutOf(null);
+  }, [presenter?.clientId, presenting]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [presentMenu, setPresentMenu] = useState(false);
 
   // Fit the board to the screen once the first sync arrives.
   const fitted = useRef(false);
@@ -152,7 +348,12 @@ export function BoardApp(p: BoardAppProps) {
         elements={elements}
         api={api}
         peers={peers}
-        canEdit={canEdit}
+        canEdit={canEdit && !presenting}
+        onManualCamera={() => { if (anim.current) { cancelAnimationFrame(anim.current); anim.current = null; } stopFollowing(); }}
+        onVote={castVote}
+        badges={badges}
+        hiddenIds={hiddenIds}
+        presenting={presenting}
         tool={tool}
         setTool={setTool}
         selection={selection}
@@ -161,12 +362,51 @@ export function BoardApp(p: BoardAppProps) {
         setCamera={setCamera}
         penColor={penColor}
         onComment={(pt) => { setCommentDraft(pt); setCommentsOpen(true); setActiveComment(null); }}
-        overlay={<CommentPins comments={comments.comments} camera={camera} activeId={activeComment} draft={commentDraft} showResolved={showResolved}
-          onOpen={(id) => { setActiveComment(id); setCommentsOpen(true); }} />}
+        overlay={<>
+          {!presenting && <CommentPins comments={comments.comments} camera={camera} activeId={activeComment} draft={commentDraft} showResolved={showResolved}
+            onOpen={(id) => { setActiveComment(id); setCommentsOpen(true); }} />}
+          {floating.map((r) => (
+            <div key={r.key} className="reaction-float pointer-events-none absolute z-[6] text-4xl"
+              style={{ left: r.x * camera.scale + camera.x - 20, top: r.y * camera.scale + camera.y - 20 }}>{r.emoji}</div>
+          ))}
+        </>}
       />
 
+      {followed && (
+        <div className="pointer-events-none absolute inset-0 z-[35] border-4" style={{ borderColor: followed.color }}>
+          <div className="pointer-events-auto absolute left-1/2 top-0 flex -translate-x-1/2 items-center gap-2 rounded-b-lg px-3 py-1 text-sm font-medium text-white"
+            style={{ background: followed.color }}>
+            Following {followed.name}
+            <button className="rounded bg-white/20 px-2 py-0.5 text-xs hover:bg-white/30" onClick={stopFollowing}>Stop</button>
+          </div>
+        </div>
+      )}
+
+      {presenting && current && (
+        <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-xl bg-slate-900/90 px-3 py-2 text-sm text-white shadow-xl">
+          <button className="rounded p-1 hover:bg-white/10 disabled:opacity-30" disabled={slide === 0} onClick={() => setSlide((s) => Math.max(0, (s ?? 0) - 1))} title="Previous (←)">
+            <ChevronLeft size={18} />
+          </button>
+          <span className="min-w-[10ch] text-center tabular-nums">{(slide ?? 0) + 1} / {frames.length} · {current.text || "Frame"}</span>
+          <button className="rounded p-1 hover:bg-white/10 disabled:opacity-30" disabled={slide === frames.length - 1} onClick={() => setSlide((s) => Math.min(frames.length - 1, (s ?? 0) + 1))} title="Next (→)">
+            <ChevronRight size={18} />
+          </button>
+          <button className="ml-2 flex items-center gap-1 rounded bg-white/10 px-2 py-1 hover:bg-white/20" onClick={stopPresenting}><X size={14} /> Exit</button>
+        </div>
+      )}
+
+      {privateOn && !presenting && (
+        <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-violet-600 px-3 py-1.5 text-xs font-medium text-white shadow">
+          Private mode is on: new notes stay hidden from others until it&apos;s turned off
+        </div>
+      )}
+      {toast && (
+        <div className="absolute left-1/2 top-16 z-40 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white shadow-lg">{toast}</div>
+      )}
+
+      {!presenting && <>
       {/* Top bar */}
-      <header className="absolute left-3 right-3 top-3 z-10 flex items-center gap-2">
+      <header className="absolute left-3 right-3 top-3 z-30 flex items-center gap-2">
         <div className="flex min-w-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
           <Link href={p.workspaceId ? `/w/${p.workspaceId}` : "/w"} className="btn-ghost p-1.5" title="Back to boards">
             <ChevronLeft size={18} /><LogoMark size={22} />
@@ -184,12 +424,39 @@ export function BoardApp(p: BoardAppProps) {
           {!canEdit && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">View only</span>}
         </div>
         <div className="ml-auto flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
+          <TimerWidget timer={session.timer} canEdit={canEdit} me={me?.name ?? ""} onChange={(t) => api.setSession("timer", t)} />
           <div className="flex -space-x-2">
             {me && <Avatar name={`${me.name} (you)`} color={me.color} size={28} />}
-            {dedupePeers(peers).slice(0, 5).map((x) => <Avatar key={x.clientId} name={x.name} color={x.color} size={28} />)}
+            {dedupePeers(peers).slice(0, 5).map((x) => (
+              <button key={x.clientId} title={following === x.clientId ? `Stop following ${x.name}` : `Follow ${x.name}`}
+                className={`rounded-full ${following === x.clientId ? "ring-2 ring-offset-1" : ""}`} style={{ ["--tw-ring-color" as string]: x.color }}
+                onClick={() => (following === x.clientId ? stopFollowing() : setFollowing(x.clientId))}>
+                <Avatar name={x.name} color={x.color} size={28} />
+              </button>
+            ))}
             {peers.length > 5 && <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs ring-2 ring-white">+{peers.length - 5}</span>}
           </div>
-          <button className={`btn-ghost p-1.5 ${commentsOpen ? "bg-slate-100" : ""}`} title="Comments" onClick={() => setCommentsOpen((o) => !o)}>
+          {canEdit && peers.length > 0 && (
+            <button className="btn-ghost p-1.5" title="Bring everyone to my view" onClick={summonEveryone}><Users size={18} /></button>
+          )}
+          <div className="h-6 w-px bg-slate-200" />
+          <ReactionPicker onReact={react} />
+          <PrivateModeButton mode={session.privateMode} canEdit={canEdit} me={me?.id ?? ""} onChange={setPrivateMode} />
+          <button className={`btn-ghost p-1.5 ${voteOpen || vote?.open ? "bg-slate-100" : ""} ${vote?.open ? "text-brand-700" : ""}`} title="Voting"
+            onClick={() => { setVoteOpen((o) => !o); setCommentsOpen(false); }}>
+            <Vote size={18} />
+          </button>
+          <div className="relative">
+            <button className="btn-ghost p-1.5" title="Present frames as slides" onClick={() => setPresentMenu((o) => !o)}><Presentation size={18} /></button>
+            {presentMenu && (
+              <div className="card absolute right-0 top-10 z-30 w-56 p-1" onMouseLeave={() => setPresentMenu(false)}>
+                <button className="btn-ghost w-full justify-start" onClick={() => { setPresentMenu(false); startPresenting(false); }}>Present on my screen</button>
+                {canEdit && <button className="btn-ghost w-full justify-start" onClick={() => { setPresentMenu(false); startPresenting(true); }}>Present to everyone</button>}
+                <p className="px-3 pb-1 text-xs text-slate-500">{frames.length} frame{frames.length === 1 ? "" : "s"}, shown in reading order.</p>
+              </div>
+            )}
+          </div>
+          <button className={`btn-ghost p-1.5 ${commentsOpen ? "bg-slate-100" : ""}`} title="Comments" onClick={() => { setCommentsOpen((o) => !o); setVoteOpen(false); }}>
             <MessageSquare size={18} />
           </button>
           <button className="btn-ghost p-1.5" title="Export PNG" onClick={exportPng}><Download size={18} /></button>
@@ -221,6 +488,7 @@ export function BoardApp(p: BoardAppProps) {
         <button className="btn-ghost p-1.5" title="Zoom in" onClick={() => canvasRef.current?.zoomBy(1.2)}><Plus size={16} /></button>
         <button className="btn-ghost p-1.5" title="Fit to content" onClick={() => canvasRef.current?.fitContent()}><Maximize size={16} /></button>
       </div>
+      </>}
 
       {!synced && status !== "connected" && (
         <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-slate-900 px-3 py-1.5 text-xs text-white">Connecting…</div>
@@ -229,11 +497,20 @@ export function BoardApp(p: BoardAppProps) {
         <button className="absolute bottom-16 left-1/2 z-30 -translate-x-1/2 rounded-lg bg-rose-600 px-3 py-2 text-sm text-white" onClick={() => setError(null)}>{error}</button>
       )}
 
-      {commentsOpen && (
+      {commentsOpen && !presenting && (
         <CommentPanel comments={comments.comments} activeId={activeComment} setActiveId={setActiveComment} draft={commentDraft} setDraft={setCommentDraft}
           api={comments} meId={p.user?.id ?? null} canEdit={canEdit} signedIn={!!p.user} showResolved={showResolved} setShowResolved={setShowResolved}
           onClose={() => { setCommentsOpen(false); setCommentDraft(null); }}
           onFocus={(c) => setCamera((cam) => ({ ...cam, x: window.innerWidth / 2 - c.x * cam.scale, y: window.innerHeight / 2 - c.y * cam.scale }))} />
+      )}
+
+      {voteOpen && !commentsOpen && !presenting && (
+        <VotePanel vote={vote} votes={votes} myVotes={myVotes} canEdit={canEdit} me={me?.name ?? ""} elements={elements}
+          onStart={(v) => { api.setSession("vote", v); setSelection([]); }}
+          onEnd={() => vote && api.setSession("vote", { ...vote, open: false })}
+          onClear={() => { if (vote) rawApi.clearVotes(vote.id); api.setSession("vote", null); }}
+          onFocus={(el) => canvasRef.current && flyTo(canvasRef.current.cameraFor({ x: el.x, y: el.y, width: el.width, height: el.height }, 200))}
+          onClose={() => setVoteOpen(false)} />
       )}
 
       {shareOpen && p.sharing && (

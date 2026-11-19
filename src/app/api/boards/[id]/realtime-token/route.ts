@@ -13,12 +13,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { user, access } = r;
   const name = user?.name ?? "Guest";
   const color = user?.color ?? GUEST_COLORS[Math.floor(Math.random() * GUEST_COLORS.length)];
+  const sub = user?.id ?? `guest:${randomBytes(6).toString("hex")}`;
   const token = await signRealtime({
-    sub: user?.id ?? `guest:${randomBytes(6).toString("hex")}`,
+    sub,
     name,
     color,
     boardId: id,
     canEdit: access.canEdit,
   });
-  return NextResponse.json({ token, name, color, canEdit: access.canEdit });
+  return NextResponse.json({ token, id: sub, name, color, canEdit: access.canEdit });
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Stage, Layer, Rect, Arrow, Transformer, Line } from "react-konva";
+import { Stage, Layer, Rect, Arrow, Transformer, Line, Group, Circle, Text as KText } from "react-konva";
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import {
@@ -32,6 +32,9 @@ export type CanvasHandle = {
   zoomBy: (factor: number) => void;
   zoomTo: (scale: number) => void;
   fitContent: () => void;
+  /** Camera that fits a world rect on screen (used for presenting frames). */
+  cameraFor: (r: R, pad?: number) => Camera;
+  size: () => { width: number; height: number };
   viewportCenter: () => { x: number; y: number };
   exportPng: () => string | null;
 };
@@ -50,6 +53,14 @@ type Props = {
   penColor: string;
   onComment: (p: { x: number; y: number }) => void;
   overlay?: React.ReactNode;
+  /** Called when the user pans or zooms by hand (stops following someone). */
+  onManualCamera?: () => void;
+  /** While a vote is open, clicking an element casts a vote instead of selecting it. */
+  onVote?: (id: string) => void;
+  badges?: Map<string, { count: number; mine: number }>;
+  hiddenIds?: Set<string>;
+  /** Hide all chrome-like affordances (selection, transformer) e.g. while presenting. */
+  presenting?: boolean;
 };
 
 const SHAPE_TOOLS: Partial<Record<Tool, ElementType>> = { rect: "rect", ellipse: "ellipse", diamond: "diamond", frame: "frame" };
@@ -63,7 +74,8 @@ type Gesture =
   | { kind: "pen"; points: number[] };
 
 export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref) {
-  const { elements, api, peers, canEdit, tool, setTool, selection, setSelection, camera, setCamera, penColor, onComment, overlay } = props;
+  const { elements, api, peers, canEdit, tool, setTool, selection, setSelection, camera, setCamera, penColor, onComment, overlay,
+    onManualCamera, onVote, badges, hiddenIds, presenting } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -98,9 +110,9 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       })
       .map((id) => stage.findOne(`#${id}`))
       .filter(Boolean) as Konva.Node[];
-    tr.nodes(canEdit ? nodes : []);
+    tr.nodes(canEdit && !presenting && !onVote ? nodes : []);
     tr.getLayer()?.batchDraw();
-  }, [selection, byId, canEdit, editingId]);
+  }, [selection, byId, canEdit, editingId, presenting, onVote]);
 
   const toWorld = useCallback(
     (sx: number, sy: number) => ({ x: (sx - camera.x) / camera.scale, y: (sy - camera.y) / camera.scale }),
@@ -123,10 +135,17 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     [setCamera],
   );
 
+  // Read the container directly: the size state lags one render behind on first mount.
+  const liveSize = () => {
+    const el = containerRef.current;
+    return el && el.clientWidth ? { width: el.clientWidth, height: el.clientHeight } : size;
+  };
+
   useImperativeHandle(ref, () => ({
     zoomBy: (f) => zoomAround(f, size.width / 2, size.height / 2),
     zoomTo: (s) => zoomAround(s / camera.scale, size.width / 2, size.height / 2),
     fitContent: () => {
+      const size = liveSize();
       const b = unionRect(elements.map(bounds));
       if (!b) return setCamera({ x: size.width / 2, y: size.height / 2, scale: 1 });
       // Leave room for the toolbar (left) and top bar, and for frame titles drawn above frames.
@@ -135,7 +154,13 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       const scale = clampScale(Math.min((size.width - padX * 2) / Math.max(bb.width, 1), (size.height - padTop - padBottom) / Math.max(bb.height, 1), 1.5));
       setCamera({ scale, x: size.width / 2 - (bb.x + bb.width / 2) * scale, y: padTop + (size.height - padTop - padBottom) / 2 - (bb.y + bb.height / 2) * scale });
     },
-    viewportCenter: () => toWorld(size.width / 2, size.height / 2),
+    cameraFor: (r, pad = 60) => {
+      const size = liveSize();
+      const scale = clampScale(Math.min((size.width - pad * 2) / Math.max(r.width, 1), (size.height - pad * 2) / Math.max(r.height, 1)));
+      return { scale, x: size.width / 2 - (r.x + r.width / 2) * scale, y: size.height / 2 - (r.y + r.height / 2) * scale };
+    },
+    size: () => liveSize(),
+    viewportCenter: () => { const size = liveSize(); return toWorld(size.width / 2, size.height / 2); },
     exportPng: () => {
       const stage = stageRef.current;
       const b = unionRect(elements.map(bounds));
@@ -157,6 +182,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     e.evt.preventDefault();
     const p = stageRef.current?.getPointerPosition();
     if (!p) return;
+    onManualCamera?.();
     if (e.evt.ctrlKey || e.evt.metaKey) {
       zoomAround(Math.exp(-e.evt.deltaY * 0.01), p.x, p.y);
     } else {
@@ -232,6 +258,16 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     if (isTransformerPart) return;
 
     if (tool === "hand" || spaceDown || e.evt.button === 1) {
+      onManualCamera?.();
+      setGesture({ kind: "pan", startX: sp.x, startY: sp.y, cam: camera });
+      return;
+    }
+    if (onVote) {
+      const id = elementIdFromTarget(e.target);
+      const el = id ? byId.get(id) : undefined;
+      if (el && el.type !== "connector" && el.type !== "frame") { onVote(el.id); return; }
+      // Clicking empty space while voting pans the board.
+      onManualCamera?.();
       setGesture({ kind: "pan", startX: sp.x, startY: sp.y, cam: camera });
       return;
     }
@@ -408,7 +444,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const [draft, setDraft] = useState("");
   const startEdit = (id: string) => {
     const el = byId.get(id);
-    if (!canEdit || !el || !TEXT_TYPES.has(el.type)) return;
+    if (!canEdit || !el || !TEXT_TYPES.has(el.type) || hiddenIds?.has(id) || onVote) return;
     setEditingId(id);
   };
   useEffect(() => {
@@ -501,7 +537,8 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
             }
             return (
               <ElementNode key={el.id} el={el} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
-                draggable={canEdit && tool === "select" && !spaceDown && !el.locked && editingId !== el.id}
+                draggable={canEdit && tool === "select" && !spaceDown && !el.locked && editingId !== el.id && !onVote && !presenting}
+                hidden={hiddenIds?.has(el.id) ?? false}
                 onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onTransformEnd={onTransformEnd} onDblClick={startEdit} />
             );
           })}
@@ -518,6 +555,17 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
             const el = byId.get(id);
             if (!el || el.type === "connector") return null;
             return <Rect key={`${id}-${color}`} x={el.x - 6} y={el.y - 6} width={el.width + 12} height={el.height + 12} stroke={color} strokeWidth={2 / s} cornerRadius={4} />;
+          })}
+          {badges && Array.from(badges.entries()).map(([id, b]) => {
+            const el = byId.get(id);
+            if (!el || (!b.count && !b.mine)) return null;
+            const r = 14 / s;
+            return (
+              <Group key={`vote-${id}`} x={el.x + el.width} y={el.y}>
+                <Circle radius={r} fill={b.mine ? "#0f8573" : "#334155"} stroke="white" strokeWidth={2 / s} />
+                <KText text={String(b.count || b.mine)} fontSize={13 / s} fontStyle="bold" fill="white" width={r * 2} height={r * 2} x={-r} y={-r} align="center" verticalAlign="middle" />
+              </Group>
+            );
           })}
           {gesture?.kind === "marquee" && (
             <Rect {...normRect(gesture.x0, gesture.y0, gesture.x1, gesture.y1)} fill="rgba(20,163,139,0.08)" stroke="#14a38b" strokeWidth={1 / s} />
