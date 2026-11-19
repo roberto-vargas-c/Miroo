@@ -3,7 +3,7 @@
 import { useState } from "react";
 import {
   MousePointer2, Hand, StickyNote, Type, Square, Circle, Diamond, Spline, PenLine, Frame, ImagePlus, MessageSquarePlus,
-  SquareKanban, Table2, Network, Link2, Shapes, Smile, FileText,
+  SquareKanban, Table2, Network, Link2, Shapes, Smile, FileText, DraftingCompass,
 } from "lucide-react";
 import { SHAPES } from "@/lib/board/shapes";
 import type { Tool } from "./Canvas";
@@ -30,14 +30,15 @@ function ShapeIcon({ path }: { path: (w: number, h: number) => string }) {
 }
 
 export function Toolbar({
-  tool, setTool, canEdit, canComment, onImage, onEmbed, placingShape, setPlacingShape, onStickers, stickersOpen, onDoc,
+  tool, setTool, canEdit, canComment, onImage, onEmbed, placingShape, setPlacingShape, onStickers, stickersOpen, onDoc, onArch, archOpen,
 }: {
   tool: Tool; setTool: (t: Tool) => void; canEdit: boolean; canComment: boolean; onImage: () => void; onEmbed: () => void;
   placingShape: string; setPlacingShape: (s: string) => void; onStickers?: () => void; stickersOpen?: boolean; onDoc?: () => void;
+  onArch?: () => void; archOpen?: boolean;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const btn = (active: boolean) =>
-    `flex h-10 w-10 items-center justify-center rounded-lg transition ${active ? "bg-brand-600 text-white" : "text-slate-700 hover:bg-slate-100"}`;
+    `flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-brand-600 text-white" : "text-slate-700 hover:bg-slate-100"}`;
   const render = (items: Item[]) => items.filter((t) => !t.edit || canEdit).map((t) => (
     <button key={t.id} className={btn(tool === t.id)} title={`${t.label}${t.key ? ` (${t.key})` : ""}`} onClick={() => { setTool(t.id); setShapesOpen(false); }}>
       <t.icon size={18} />
@@ -46,7 +47,7 @@ export function Toolbar({
   const shapeActive = tool === "rect" || tool === "ellipse" || tool === "diamond" || tool === "shape";
 
   return (
-    <div className="absolute left-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+    <div className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 right-3 z-10 flex gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg [scrollbar-width:none] sm:bottom-auto sm:right-auto sm:top-1/2 sm:-translate-y-1/2 sm:flex-col sm:overflow-visible">
       {render(TOOLS)}
       {canEdit && (
         <div className="relative">
@@ -54,7 +55,7 @@ export function Toolbar({
             <Shapes size={18} />
           </button>
           {shapesOpen && (
-            <div className="card absolute left-12 top-0 grid w-52 grid-cols-4 gap-1 p-1.5">
+            <div className="card fixed bottom-[4.75rem] left-3 right-3 z-30 grid grid-cols-6 gap-1 p-1.5 sm:absolute sm:bottom-auto sm:left-12 sm:right-auto sm:top-0 sm:w-52 sm:grid-cols-4">
               {([["rect", Square, "Rectangle"], ["ellipse", Circle, "Ellipse"], ["diamond", Diamond, "Diamond"]] as const).map(([id, Icon, name]) => (
                 <button key={id} title={name} className={btn(tool === id)} onClick={() => { setTool(id); setShapesOpen(false); }}><Icon size={18} /></button>
               ))}
@@ -76,6 +77,9 @@ export function Toolbar({
           <button className={btn(false)} title="Images, PDFs and videos" onClick={onImage}><ImagePlus size={18} /></button>
           <button className={btn(false)} title="Embed a link, video, Figma file… (or paste a URL)" onClick={onEmbed}><Link2 size={18} /></button>
         </>
+      )}
+      {onArch && (
+        <button className={`${btn(!!archOpen)} sm:hidden`} title="Plan tools" onClick={onArch}><DraftingCompass size={18} /></button>
       )}
       {canComment && (
         <button className={btn(tool === "comment")} title="Comment (C)" onClick={() => setTool("comment")}><MessageSquarePlus size={18} /></button>

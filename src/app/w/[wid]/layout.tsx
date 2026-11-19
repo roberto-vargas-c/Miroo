@@ -5,7 +5,7 @@ import { VerifyBanner } from "@/components/VerifyBanner";
 import { db } from "@/lib/db";
 import { loadWorkspace } from "@/lib/workspace";
 import { logout } from "@/app/actions/auth";
-import { Logo } from "@/components/Logo";
+import { Logo, LogoMark } from "@/components/Logo";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { Avatar } from "@/components/Avatar";
 import { avatarUrl } from "@/lib/avatar";
@@ -29,16 +29,22 @@ export default async function WorkspaceLayout({ children, params }: { children: 
   ];
   return (
     <div className="flex min-h-full flex-col md:flex-row">
-      <aside className="flex shrink-0 flex-col gap-6 border-b border-slate-200 bg-white p-4 md:min-h-screen md:w-64 md:border-b-0 md:border-r">
-        <Link href="/w"><Logo /></Link>
-        <WorkspaceSwitcher current={{ id: workspace.id, name: workspace.name }} all={all.map((m) => m.workspace)} />
-        <nav className="flex gap-1 overflow-x-auto md:flex-col">
+      <aside className="flex shrink-0 flex-col gap-3 border-b border-slate-200 bg-white p-3 md:min-h-screen md:w-64 md:gap-6 md:border-b-0 md:border-r md:p-4">
+        <div className="flex items-center gap-3 md:flex-col md:items-stretch md:gap-6">
+          <Link href="/w" className="shrink-0"><span className="md:hidden"><LogoMark /></span><span className="hidden md:inline"><Logo /></span></Link>
+          <div className="min-w-0 flex-1"><WorkspaceSwitcher current={{ id: workspace.id, name: workspace.name }} all={all.map((m) => m.workspace)} /></div>
+          <Link href={`/w/${wid}/profile`} className="shrink-0 md:hidden" title="Your profile"><Avatar name={user.name} color={user.color} src={avatarUrl(user)} /></Link>
+        </div>
+        <nav className="-mx-3 flex gap-1 overflow-x-auto px-3 [scrollbar-width:none] md:mx-0 md:flex-col md:px-0">
           {nav.map(({ href, label, icon: Icon }) => (
             <Link key={href} href={href} className="btn-ghost justify-start whitespace-nowrap">
               <Icon size={16} /> {label}
             </Link>
           ))}
           <InstallButton />
+          <form action={logout} className="md:hidden">
+            <button className="btn-ghost justify-start whitespace-nowrap"><LogOut size={16} /> Log out</button>
+          </form>
         </nav>
         <div className="mt-auto hidden items-center gap-2 md:flex">
           <Link href={`/w/${wid}/profile`} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg hover:bg-slate-50" title="Your profile">

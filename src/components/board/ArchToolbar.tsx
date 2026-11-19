@@ -25,21 +25,23 @@ const ARCH_TOOLS: { id: Tool; label: string; key: string; icon: typeof Ruler }[]
 ];
 
 export function ArchToolbar({
-  tool, setTool, onImportPlan, importing, placingSymbol, setPlacingSymbol, unit, setUnit, scaleText,
+  tool, setTool, onImportPlan, importing, placingSymbol, setPlacingSymbol, unit, setUnit, scaleText, mobileOpen,
 }: {
   tool: Tool; setTool: (t: Tool) => void; onImportPlan: () => void; importing: string | null;
   placingSymbol: string | null; setPlacingSymbol: (id: string | null) => void;
   unit: Unit; setUnit: (u: Unit) => void; scaleText: string;
+  /** On phones the plan tools sit behind a toggle in the main toolbar. */
+  mobileOpen?: boolean;
 }) {
   const [symbolsOpen, setSymbolsOpen] = useState(false);
   const btn = (active: boolean) =>
-    `flex h-9 w-9 items-center justify-center rounded-lg transition ${active ? "bg-rose-700 text-white" : "text-slate-700 hover:bg-slate-100"}`;
+    `flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition ${active ? "bg-rose-700 text-white" : "text-slate-700 hover:bg-slate-100"}`;
   const groups = Array.from(new Set(SYMBOLS.map((s) => s.group)));
 
   return (
-    <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
+    <div className={`absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+3.75rem)] left-3 right-3 z-10 sm:bottom-3 sm:left-1/2 sm:right-auto sm:block sm:-translate-x-1/2 ${mobileOpen ? "" : "hidden"}`}>
       {symbolsOpen && (
-        <div className="card absolute bottom-14 left-1/2 max-h-[60vh] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 overflow-y-auto p-3">
+        <div className="card absolute bottom-14 left-0 right-0 max-h-[55vh] overflow-y-auto p-3 sm:left-1/2 sm:right-auto sm:max-h-[60vh] sm:w-[min(560px,calc(100vw-24px))] sm:-translate-x-1/2">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-semibold">Plan symbols</h3>
             <button className="btn-ghost p-1" onClick={() => setSymbolsOpen(false)}><X size={14} /></button>
@@ -62,8 +64,8 @@ export function ArchToolbar({
           ))}
         </div>
       )}
-      <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
-        <button className="btn-ghost h-9 px-2.5 text-sm" title="Import a PDF or image plan" onClick={onImportPlan} disabled={!!importing}>
+      <div className="flex items-center gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg [scrollbar-width:none] sm:overflow-visible">
+        <button className="btn-ghost h-9 shrink-0 px-2.5 text-sm" title="Import a PDF or image plan" onClick={onImportPlan} disabled={!!importing}>
           <FileUp size={16} /> <span className="hidden sm:inline">{importing ?? "Import plan"}</span>
         </button>
         <div className="mx-0.5 h-6 w-px bg-slate-200" />

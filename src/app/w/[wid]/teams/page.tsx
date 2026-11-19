@@ -29,8 +29,8 @@ export default async function TeamsPage({ params }: { params: Promise<{ wid: str
 
       {isAdmin && (
         <form action={createTeam.bind(null, wid)} className="card flex flex-wrap gap-2 p-5">
-          <input name="name" required placeholder="Team name, e.g. Design" className="input min-w-0 flex-1" />
-          <input name="description" placeholder="What does this team do? (optional)" className="input min-w-0 flex-[2]" />
+          <input name="name" required placeholder="Team name, e.g. Design" className="input min-w-0 basis-full sm:flex-1 sm:basis-auto" />
+          <input name="description" placeholder="What does this team do? (optional)" className="input min-w-0 basis-full sm:flex-[2] sm:basis-auto" />
           <button className="btn-primary">Create team</button>
         </form>
       )}
@@ -69,7 +69,7 @@ export default async function TeamsPage({ params }: { params: Promise<{ wid: str
             </ul>
             {canManage && addable.length > 0 && (
               <form action={addTeamMember.bind(null, t.id)} className="mt-3 flex flex-wrap gap-2">
-                <select name="userId" className="input w-auto flex-1">
+                <select name="userId" className="input w-auto min-w-0 basis-full sm:flex-1 sm:basis-auto">
                   {addable.map((m) => <option key={m.userId} value={m.userId}>{m.user.name}</option>)}
                 </select>
                 <select name="role" className="input w-auto" defaultValue="MEMBER">

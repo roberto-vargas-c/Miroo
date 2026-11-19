@@ -81,7 +81,7 @@ export function DocPanel({ doc, el, canEdit, onUpdate, onClose, onLocate, upload
   };
 
   return (
-    <aside className={`absolute bottom-3 right-3 top-16 z-30 flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl transition-[width] ${wide ? "w-[min(960px,calc(100vw-24px))]" : "w-[min(620px,calc(100vw-24px))]"}`}
+    <aside className={`absolute bottom-3 left-3 right-3 top-16 z-30 sm:left-auto flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl transition-[width] ${wide ? "w-[min(960px,calc(100vw-24px))]" : "w-[min(620px,calc(100vw-24px))]"}`}
       onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
       onDragOver={(e) => { e.stopPropagation(); }} onDrop={(e) => {
         const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith("image/"));

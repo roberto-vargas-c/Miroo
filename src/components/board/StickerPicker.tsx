@@ -63,7 +63,7 @@ export function StickerPicker({ gifs, onPick, onUploadGif, onClose }: {
     (r.kind === "sticker" && showStickers && STICKER_BY_ID.has(r.id)) || (r.kind === "emoji" && showEmojis) || (r.kind === "gif" && showGifs && gifs.includes(r.id))), [recent, showStickers, showEmojis, showGifs, gifs]);
 
   return (
-    <div className="card absolute left-16 top-1/2 z-20 ml-2 flex h-[min(560px,80vh)] w-[340px] -translate-y-1/2 flex-col overflow-hidden" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="card absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+3.75rem)] left-3 right-3 z-20 flex h-[min(420px,55vh)] flex-col overflow-hidden sm:bottom-auto sm:left-16 sm:right-auto sm:top-1/2 sm:ml-2 sm:h-[min(560px,80vh)] sm:w-[340px] sm:-translate-y-1/2" onPointerDown={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-1 border-b border-slate-100 px-3 pt-3 pb-2">
         {(["all", "stickers", "emojis", "gifs"] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)}

@@ -10,7 +10,7 @@ export function InviteForm({ workspaceId, canInviteOwner }: { workspaceId: strin
   return (
     <div className="space-y-3">
       <form action={action} className="flex flex-wrap gap-2">
-        <input name="email" type="email" required placeholder="name@company.com" className="input min-w-0 flex-1" />
+        <input name="email" type="email" required placeholder="name@company.com" className="input min-w-0 basis-full flex-1 sm:basis-auto" />
         <select name="role" defaultValue="MEMBER" className="input w-auto">
           {canInviteOwner && <option value="OWNER">Owner</option>}
           <option value="ADMIN">Admin</option>

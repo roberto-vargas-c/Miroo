@@ -15,7 +15,7 @@ export function PenPalette({ color, setColor, width, setWidth, highlighter }: {
   const widths = highlighter ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
   const custom = !SWATCHES.includes(color.toLowerCase());
   return (
-    <div className="absolute left-16 top-1/2 z-10 ml-2 flex -translate-y-1/2 gap-2" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="absolute left-3 top-[4.25rem] z-10 flex gap-2 sm:left-16 sm:top-1/2 sm:ml-2 sm:-translate-y-1/2" onPointerDown={(e) => e.stopPropagation()}>
       <div className="flex flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
         <div className="grid grid-cols-2 gap-1.5">
           {SWATCHES.map((c) => (

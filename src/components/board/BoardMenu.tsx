@@ -38,7 +38,7 @@ export function BoardMenu({
         <Ellipsis size={18} />
       </button>
       {open && (
-        <div className="card absolute right-0 top-10 z-30 w-72 p-1">
+        <div className="card fixed left-3 right-3 top-40 z-40 sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:z-30 sm:w-72 p-1">
           <div className="px-3 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-slate-400">
             Export {hasSelection ? "selection" : "board"}
           </div>
