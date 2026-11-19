@@ -133,10 +133,12 @@ Schema runs on Cloudflare Workers: the Next.js app through [OpenNext](https://op
    | `AUTH_SECRET` | secret, optional | signs sessions; without it, the first deploy generates one on the Worker and keeps it |
    | `APP_URL` | variable, optional | the public URL, if not the one in `wrangler.jsonc` (e.g. your own domain) |
    | `CLOUDFLARE_ACCOUNT_ID` | secret, optional | only if the token can reach more than one account |
-   | `RESEND_API_KEY`, `EMAIL_FROM` | secrets, optional | sends email through [Resend](https://resend.com); without them, emails only go to the Worker's logs |
+   | `RESEND_API_KEY` | secret, optional | not needed on Cloudflare: email goes through Cloudflare Email Sending (see below) |
    | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | secrets, optional | "Continue with Google" (redirect URI `<APP_URL>/api/auth/oidc/callback`) |
 
 6. Run **Actions → Deploy to Cloudflare → Run workflow**. A custom domain can be added afterwards under the Worker's Settings → Domains & Routes; set `APP_URL` to match.
+
+**Email** goes through Cloudflare Email Sending (included in Workers Paid: 3,000 emails a month, then $0.35 per 1,000). Onboard the sending domain under Email Service → Email Sending, then set `EMAIL_FROM` in `wrangler.jsonc` to an address on it. This deployment sends from `no-reply@schema.robertovargas.dev`.
 
 **Try the Worker locally**: put `AUTH_SECRET` and `APP_URL="http://localhost:8787"` in `.dev.vars`, then `npm run cf:preview`. It uses the local Postgres from `wrangler.jsonc`.
 
