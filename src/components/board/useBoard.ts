@@ -168,7 +168,7 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
     };
   }, [doc, map, undo, sessionMap, votesMap]);
 
-  return { elements, peers, status, synced, me, api, session, votes };
+  return { elements, peers, status, synced, me, api, session, votes, doc };
 }
 
 export type BoardApi = ReturnType<typeof useBoard>["api"];

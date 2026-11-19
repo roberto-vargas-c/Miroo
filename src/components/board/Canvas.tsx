@@ -84,6 +84,9 @@ type Props = {
   /** Stroke width for the pen / highlighter in screen-independent board units. */
   penWidth?: number;
   onOpenVideo?: (el: VideoElement) => void;
+  onOpenDoc?: (id: string) => void;
+  /** A document was duplicated or pasted: copy its content to the new one. */
+  onCopyDoc?: (fromId: string, toId: string) => void;
   /** What the scroll wheel does: auto (mouse zooms, trackpad pans), always zoom, or always pan. */
   wheelMode?: WheelMode;
   /** Connector style for new connectors. */
@@ -369,6 +372,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         if (!src.length) return;
         e.preventDefault();
         const copies = duplicate(src);
+        src.forEach((s, i) => { if (s.type === "doc") props.onCopyDoc?.(s.id, copies[i].id); });
         api.add(copies);
         setSelection(copies.map((c) => c.id));
         return;
@@ -756,6 +760,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     if (!el) return;
     if (el.type === "embed") { onOpenEmbed?.(el as EmbedElement); return; }
     if (el.type === "video") { onOpenVideo?.(el as VideoElement); return; }
+    if (el.type === "doc") { props.onOpenDoc?.(el.id); return; }
     if (!canEdit || hiddenIds?.has(id) || onVote) return;
     if (el.type === "table") {
       const p = pointerWorld();

@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse } from "lucide-react";
-import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle } from "@/lib/board/types";
+import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle, type DocElement, docFragment } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
 import { unionRect, bounds as elBounds } from "./geometry";
@@ -13,6 +13,7 @@ import { ScaleDialog } from "./ScaleDialog";
 import { renameBoard } from "@/app/actions/workspace";
 import { LogoMark } from "@/components/Logo";
 import { Avatar } from "@/components/Avatar";
+import * as Y from "yjs";
 import { useBoard, type Viewport, type PrivateMode } from "./useBoard";
 import { TimerWidget, VotePanel, PrivateModeButton, ReactionPicker, tallyVotes, type FloatingReaction } from "./Facilitation";
 import type { CanvasHandle, Tool, WheelMode } from "./Canvas";
@@ -20,6 +21,7 @@ import type { Camera } from "./geometry";
 import { Toolbar } from "./Toolbar";
 import { PenPalette } from "./PenPalette";
 import { CropDialog, applyCrop } from "./CropDialog";
+const DocPanel = dynamic(() => import("./DocPanel").then((m) => m.DocPanel), { ssr: false });
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
 import { ShareDialog, type Sharing } from "./ShareDialog";
@@ -48,7 +50,7 @@ export type BoardAppProps = {
 };
 
 export function BoardApp(p: BoardAppProps) {
-  const { elements: liveElements, peers, status, synced, me, api: rawApi, session, votes } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
+  const { elements: liveElements, peers, status, synced, me, api: rawApi, session, votes, doc: ydoc } = useBoard(p.boardId, p.shareToken, p.realtimeUrl);
   // Version history preview: show a saved version read-only instead of the live board.
   const [preview, setPreview] = useState<{ id: string; label: string; elements: BoardElement[] } | null>(null);
   const elements = preview?.elements ?? liveElements;
@@ -389,6 +391,15 @@ export function BoardApp(p: BoardAppProps) {
   const [viewing, setViewing] = useState<EmbedElement | null>(null);
   const [playingVideo, setPlayingVideo] = useState<VideoElement | null>(null);
   const [cropping, setCropping] = useState<string | null>(null);
+  const [openDoc, setOpenDoc] = useState<string | null>(null);
+  const openDocEl = openDoc ? (elements.find((e) => e.id === openDoc && e.type === "doc") as DocElement | undefined) : undefined;
+  const addDoc = () => {
+    const c = canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    const el = makeElement("doc", c.x - 130, c.y - 160);
+    api.add([el]);
+    setSelection([el.id]);
+    setOpenDoc(el.id);
+  };
   const croppingEl = cropping ? (elements.find((e) => e.id === cropping) as ImageElement | undefined) : undefined;
   const addEmbed = useCallback(async (rawUrl: string, at?: { x: number; y: number }) => {
     let url = rawUrl.trim();
@@ -411,7 +422,7 @@ export function BoardApp(p: BoardAppProps) {
     if (!canEdit) return;
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
-      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
+      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (looksLikeUrl(text)) { e.preventDefault(); addEmbed(text); }
     };
@@ -549,7 +560,7 @@ export function BoardApp(p: BoardAppProps) {
     if (!canEdit) return;
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
-      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
+      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
       const files = Array.from(e.clipboardData?.files ?? []);
       if (files.length) { e.preventDefault(); addFiles(files); }
     };
@@ -560,6 +571,11 @@ export function BoardApp(p: BoardAppProps) {
   const duplicateSelected = () => {
     const src = selected.filter((s) => s.type !== "connector");
     const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
+    // Documents keep their content outside the element, so copy it too.
+    ydoc.transact(() => src.forEach((s, i) => {
+      if (s.type !== "doc") return;
+      copyXml(ydoc.getXmlFragment(docFragment(s.id)), ydoc.getXmlFragment(docFragment(copies[i].id)));
+    }));
     api.add(copies);
     setSelection(copies.map((c) => c.id));
   };
@@ -732,6 +748,8 @@ export function BoardApp(p: BoardAppProps) {
         connectorStyle={connectorStyle}
         wheelMode={wheelMode}
         onOpenVideo={(el) => setPlayingVideo(el)}
+        onOpenDoc={(id) => setOpenDoc(id)}
+        onCopyDoc={(from, to) => ydoc.transact(() => copyXml(ydoc.getXmlFragment(docFragment(from)), ydoc.getXmlFragment(docFragment(to))))}
         boardScale={session.boardScale}
         unit={unit}
         placingSymbol={placingSymbol}
@@ -856,7 +874,7 @@ export function BoardApp(p: BoardAppProps) {
 
       <Toolbar tool={tool} setTool={setTool} canEdit={canEdit} canComment={!!p.user} onImage={() => fileRef.current?.click()}
         onEmbed={() => setEmbedDialog("")} placingShape={placingShape} setPlacingShape={setPlacingShape}
-        stickersOpen={stickersOpen} onStickers={() => setStickersOpen((o) => !o)} />
+        stickersOpen={stickersOpen} onStickers={() => setStickersOpen((o) => !o)} onDoc={addDoc} />
       {canEdit && stickersOpen && (
         <StickerPicker gifs={boardGifs} onPick={(pk) => addSticker(pk)} onUploadGif={() => gifInputRef.current?.click()} onClose={() => setStickersOpen(false)} />
       )}
@@ -992,6 +1010,12 @@ export function BoardApp(p: BoardAppProps) {
           </form>
         </div>
       )}
+      {openDocEl && (
+        <DocPanel key={openDocEl.id} doc={ydoc} el={openDocEl} canEdit={canEdit} onClose={() => setOpenDoc(null)}
+          onUpdate={(patch) => api.update(openDocEl.id, patch as Partial<BoardElement>)}
+          onLocate={() => { const b = elBounds(openDocEl); if (canvasRef.current) flyTo(canvasRef.current.cameraFor(b, 200)); }}
+          uploadImage={(f) => uploadBlob(f, f.name)} />
+      )}
       {croppingEl && (
         <CropDialog el={croppingEl} onClose={() => setCropping(null)}
           onApply={(c) => { api.update(croppingEl.id, applyCrop(croppingEl, c) as Partial<BoardElement>); setCropping(null); }} />
@@ -1079,3 +1103,19 @@ const WHEEL_LABEL: Record<WheelMode, string> = {
   zoom: "always zooms",
   pan: "always scrolls (hold Ctrl or ⌘ to zoom)",
 };
+
+/** Deep-copies Yjs XML content (a document's body) into an empty, already attached parent. */
+function copyXml(from: Y.XmlFragment | Y.XmlElement, to: Y.XmlFragment | Y.XmlElement) {
+  from.toArray().forEach((node, i) => {
+    if (node instanceof Y.XmlText) {
+      const t = new Y.XmlText();
+      to.insert(i, [t]);
+      t.applyDelta(node.toDelta());
+    } else if (node instanceof Y.XmlElement) {
+      const el = new Y.XmlElement(node.nodeName);
+      to.insert(i, [el]);
+      for (const [k, v] of Object.entries(node.getAttributes())) el.setAttribute(k, v as string);
+      copyXml(node, el);
+    }
+  });
+}

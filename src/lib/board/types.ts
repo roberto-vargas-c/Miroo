@@ -23,7 +23,8 @@ export type ElementType =
   | "shape" // extra diagram shapes (triangle, cylinder, …)
   | "embed" // link / video / Figma etc.
   | "video" // uploaded video file
-  | "sticker"; // sticker art or a big emoji
+  | "sticker" // sticker art or a big emoji
+  | "doc"; // rich-text document; its content is the Y.XmlFragment docFragment(id)
 
 export interface BaseElement {
   id: string;
@@ -89,6 +90,14 @@ export interface StickerElement extends BaseElement {
   emoji?: string;
 }
 
+/** A document on the board. `text` holds a plain-text preview, kept up to date by the editor. */
+export interface DocElement extends BaseElement {
+  type: "doc";
+  title: string;
+}
+/** Name of the Yjs fragment that holds a document's content. */
+export const docFragment = (id: string) => `doc:${id}`;
+
 export interface VideoElement extends BaseElement {
   type: "video";
   src: string;
@@ -143,7 +152,7 @@ export interface EmbedElement extends BaseElement {
 
 export type BoardElement =
   | BaseElement | ConnectorElement | PenElement | ImageElement | MeasureElement | SymbolElement
-  | CardElement | TableElement | TopicElement | ShapeElement | EmbedElement | VideoElement | StickerElement;
+  | CardElement | TableElement | TopicElement | ShapeElement | EmbedElement | VideoElement | StickerElement | DocElement;
 
 export function hasPoints(el: BoardElement): el is PenElement | MeasureElement {
   return el.type === "pen" || el.type === "dimension" || el.type === "area";
@@ -193,6 +202,8 @@ export function makeElement(type: ElementType, x: number, y: number, extra: Part
       return { ...base, width: 200, height: 56, fill: "#0f8573", stroke: "#0f8573", text: "Central idea", fontSize: 18, root: base.id, level: 0, ...extra } as TopicElement;
     case "shape":
       return { ...base, width: 160, height: 120, fill: "#ffffff", stroke: "#1f2937", text: "", fontSize: 16, shape: "triangle", ...extra } as ShapeElement;
+    case "doc":
+      return { ...base, width: 260, height: 320, fill: "#ffffff", stroke: "#cbd5e1", title: "Untitled document", text: "", ...extra } as DocElement;
     case "embed":
       return { ...base, width: 360, height: 120, fill: "#ffffff", stroke: "#cbd5e1", url: "", ...extra } as EmbedElement;
     default:

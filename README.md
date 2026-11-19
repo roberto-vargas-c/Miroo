@@ -21,6 +21,7 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Export the board as PNG
 
 **Content blocks**
+- Documents: a page on the board that opens in a side editor with a title, headings, bold/italic/underline/strike, links, bulleted, numbered and check lists, quotes, code blocks, dividers and images. Everyone on the board edits it together live; it's saved and versioned with the board, and its card shows the title and a preview
 - Task cards with status, assignee (any workspace member) and due date, with an overdue warning
 - Tables: double-click a cell to edit, Tab moves to the next cell, add or remove rows and columns, optional header row
 - Mind maps (G): Tab adds a branch, Enter adds a sibling; branches are colored and connected automatically
@@ -158,9 +159,8 @@ Schema runs on Cloudflare Workers: the Next.js app through [OpenNext](https://op
 
 ## Not yet built
 
-- Touch pinch-zoom on phones and tablets
 - Board thumbnails
 - SAML single sign-on and SCIM user provisioning (SSO uses OpenID Connect, which every major identity provider supports)
 - Templates keep image links to the board they came from; deleting that board removes those images
 - Automated tests and CI
-- Image storage in object storage (S3/R2) instead of Postgres
+- Images in object storage: on Cloudflare only videos go to R2 so far; images and everything on Node hosts stay in Postgres

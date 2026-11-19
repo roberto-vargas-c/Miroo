@@ -6,7 +6,7 @@ import { loadGif, type GifFrames } from "./gif";
 import { stickerUrl } from "@/lib/board/stickers";
 import { Group, Rect, Text, Ellipse, Line, Image as KImage, Path, Label as KLabel, Tag } from "react-konva";
 import type {
-  BoardElement, CardElement, EmbedElement, ImageElement, VideoElement, StickerElement, MeasureElement, PenElement, ShapeElement, SymbolElement, TableElement, TopicElement,
+  BoardElement, CardElement, EmbedElement, ImageElement, VideoElement, StickerElement, DocElement, MeasureElement, PenElement, ShapeElement, SymbolElement, TableElement, TopicElement,
 } from "@/lib/board/types";
 import { SHAPE_BY_ID } from "@/lib/board/shapes";
 import { cloudPath, polygonCentroid, SYMBOL_BY_ID } from "@/lib/board/arch";
@@ -269,6 +269,25 @@ export function ElementNode({ el, hidden, measure, zoom = 1, editingCell, dragga
           <ImageShape el={el as ImageElement} />
         </Group>
       );
+    case "doc": {
+      const d = el as DocElement;
+      const fold = 22, pad = 18;
+      return (
+        <Group {...common}>
+          <Path data={`M0 0 H${el.width - fold} L${el.width} ${fold} V${el.height} H0 Z`} fill="#ffffff" stroke="#cbd5e1" strokeWidth={1}
+            shadowColor="#0f172a" shadowOpacity={0.12} shadowBlur={14} shadowOffsetY={4} />
+          <Path data={`M${el.width - fold} 0 V${fold} H${el.width} Z`} fill="#e2e8f0" stroke="#cbd5e1" strokeWidth={1} />
+          <Rect x={pad} y={pad} width={26} height={30} cornerRadius={4} fill="#2563eb" listening={false} />
+          <Rect x={pad + 6} y={pad + 9} width={14} height={2.5} fill="#fff" listening={false} />
+          <Rect x={pad + 6} y={pad + 14} width={14} height={2.5} fill="#fff" listening={false} />
+          <Rect x={pad + 6} y={pad + 19} width={9} height={2.5} fill="#fff" listening={false} />
+          <Text x={pad} y={pad + 44} width={el.width - pad * 2} text={d.title || "Untitled document"} fontSize={18} fontStyle="700"
+            fill="#0f172a" wrap="word" ellipsis height={46} lineHeight={1.2} listening={false} />
+          <Text x={pad} y={pad + 96} width={el.width - pad * 2} height={Math.max(0, el.height - pad * 2 - 96)} text={el.text || "Double-click to write"}
+            fontSize={13} lineHeight={1.45} fill={el.text ? "#475569" : "#94a3b8"} wrap="word" ellipsis listening={false} />
+        </Group>
+      );
+    }
     case "sticker":
       return (
         <Group {...common}>
