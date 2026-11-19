@@ -1,0 +1,30 @@
+{
+  // Cloudflare Workers deployment. See "Deploying to Cloudflare" in README.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "schema",
+  // Our entry wraps the OpenNext worker and adds the realtime Durable Object.
+  "main": "cloudflare/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "schema" }],
+  "durable_objects": {
+    "bindings": [{ "name": "BOARD_ROOM", "class_name": "BoardRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardRoom"] }],
+  // Postgres through Hyperdrive (the "schema-db" configuration in the Cloudflare dashboard).
+  // To use another one, replace this id, or set the HYPERDRIVE_ID secret for the deploy workflow.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "2a5829ca82054f28a8e3ed0898cfb854",
+      "localConnectionString": "postgresql://miroo:miroo@localhost:5432/miroo"
+    }
+  ],
+  "vars": {
+    // Public address of the app, used in emailed links. The APP_URL GitHub variable overrides it.
+    "APP_URL": "https://schema.robert-en-var.workers.dev",
+    "NEXT_PUBLIC_REALTIME_URL": "/realtime"
+  },
+  "observability": { "enabled": true }
+}

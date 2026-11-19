@@ -1,5 +1,7 @@
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
+  // No Rust query engine: queries go through the `pg` driver, which also runs on Cloudflare Workers.
+  engineType = "client"
 }
 
 datasource db {

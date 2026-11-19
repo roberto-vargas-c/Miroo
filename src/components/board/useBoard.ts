@@ -77,7 +77,9 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
       const { token, id, name, color, canEdit } = await res.json();
       if (cancelled) return;
       setMe({ id, name, color, canEdit });
-      provider = new WebsocketProvider(realtimeUrl, boardId, doc, { params: { token } });
+      // A path like "/realtime" means the same host as the page (Cloudflare deploys).
+      const wsUrl = realtimeUrl.startsWith("/") ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${realtimeUrl}` : realtimeUrl;
+      provider = new WebsocketProvider(wsUrl, boardId, doc, { params: { token } });
       providerRef.current = provider;
       provider.awareness.setLocalStateField("user", { id, name, color });
       provider.on("status", ({ status }: { status: string }) => setStatus(status as ConnStatus));

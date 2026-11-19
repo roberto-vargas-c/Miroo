@@ -32,7 +32,7 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
       sharing={isMember ? { linkAccess: board.linkAccess, visibility: board.visibility, teamId: board.teamId, shareToken: board.shareToken } : null}
       teams={teams}
       members={members}
-      realtimeUrl={process.env.NEXT_PUBLIC_REALTIME_URL ?? "ws://localhost:1234"}
+      realtimeUrl={process.env.NEXT_PUBLIC_REALTIME_URL || "ws://localhost:1234"}
       ai={aiEnabled()}
     />
   );

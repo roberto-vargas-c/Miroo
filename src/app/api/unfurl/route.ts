@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
-import { lookup } from "node:dns/promises";
-import net from "node:net";
+import { isIPv4, lookupAll } from "@/lib/dns";
 import { currentUser } from "@/lib/session";
 
 // Fetches a page's title/description for link cards. Guards against server-side request forgery:
 // only http(s), only public IPs, a few redirects at most, small and slow responses cut off.
 
 function isPrivate(ip: string) {
-  if (net.isIPv4(ip)) {
+  if (isIPv4(ip)) {
     const [a, b] = ip.split(".").map(Number);
     return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
       (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
@@ -21,8 +20,8 @@ function isPrivate(ip: string) {
 async function assertPublic(u: URL) {
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("bad protocol");
   if (u.username || u.password) throw new Error("credentials in url");
-  const addrs = await lookup(u.hostname, { all: true });
-  if (!addrs.length || addrs.some((a) => isPrivate(a.address))) throw new Error("private address");
+  const addrs = await lookupAll(u.hostname);
+  if (!addrs.length || addrs.some(isPrivate)) throw new Error("private address");
 }
 
 function pick(html: string, re: RegExp) {
