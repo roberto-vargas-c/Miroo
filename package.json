@@ -19,6 +19,7 @@
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.17",
+    "jspdf": "^4.2.1",
     "konva": "^10.1.0",
     "lib0": "^0.2.120",
     "lucide-react": "^1.75.0",

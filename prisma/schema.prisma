@@ -52,10 +52,12 @@ model Workspace {
   name      String
   createdAt DateTime @default(now())
 
-  members WorkspaceMember[]
-  teams   Team[]
-  boards  Board[]
-  invites Invite[]
+  members   WorkspaceMember[]
+  teams     Team[]
+  boards    Board[]
+  invites   Invite[]
+  folders   Folder[]
+  templates BoardTemplate[]
 }
 
 model WorkspaceMember {
@@ -116,6 +118,7 @@ model Board {
   id          String          @id @default(cuid())
   workspaceId String
   teamId      String?
+  folderId    String?
   title       String
   createdById String
   visibility  BoardVisibility @default(WORKSPACE)
@@ -126,12 +129,14 @@ model Board {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  team      Team?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  createdBy User        @relation("BoardCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team      Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  folder    Folder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  createdBy User           @relation("BoardCreator", fields: [createdById], references: [id], onDelete: Cascade)
   comments  Comment[]
   assets    Asset[]
   stars     BoardStar[]
+  versions  BoardVersion[]
 
   @@index([workspaceId])
 }
@@ -173,4 +178,50 @@ model Asset {
   createdAt DateTime @default(now())
 
   board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+}
+
+/// A folder (project) that groups boards inside a workspace.
+model Folder {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  boards    Board[]
+
+  @@index([workspaceId])
+}
+
+/// A snapshot of a board's Yjs document. Saved automatically every few minutes while people
+/// edit, before a restore, or by hand with a name.
+model BoardVersion {
+  id           String   @id @default(cuid())
+  boardId      String
+  content      Bytes
+  label        String?
+  auto         Boolean  @default(true)
+  elementCount Int      @default(0)
+  createdById  String?
+  createdAt    DateTime @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId, createdAt])
+}
+
+/// A board saved as a reusable template for everyone in the workspace.
+model BoardTemplate {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String   @default("")
+  /// JSON array of board elements
+  elements    Json
+  createdById String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
 }

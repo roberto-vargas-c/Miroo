@@ -51,8 +51,16 @@ export type CanvasHandle = {
   cameraFor: (r: R, pad?: number) => Camera;
   size: () => { width: number; height: number };
   viewportCenter: () => { x: number; y: number };
-  exportPng: () => string | null;
+  /**
+   * Render part of the board to a PNG data URL. `rect` is in board units (default: everything,
+   * padded); `pixelsPerUnit` is the target resolution, lowered if the image would be too big.
+   */
+  exportImage: (opts?: { rect?: R; pixelsPerUnit?: number; type?: "image/png" | "image/jpeg" }) => { url: string; rect: R } | null;
 };
+
+/** Browsers refuse canvases much larger than this. */
+const MAX_EXPORT_SIDE = 14000;
+const MAX_EXPORT_AREA = 120_000_000;
 
 type Props = {
   elements: BoardElement[];
@@ -194,20 +202,25 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     },
     size: () => liveSize(),
     viewportCenter: () => { const size = liveSize(); return toWorld(size.width / 2, size.height / 2); },
-    exportPng: () => {
+    exportImage: (opts) => {
       const stage = stageRef.current;
-      const b = unionRect(elements.map(bounds));
-      if (!stage || !b) return null;
+      const all = unionRect(elements.map(bounds));
+      const rect = opts?.rect ?? (all ? { x: all.x - 40, y: all.y - 70, width: all.width + 80, height: all.height + 110 } : null);
+      if (!stage || !rect || rect.width <= 0 || rect.height <= 0) return null;
+      const prevNodes = trRef.current?.nodes() ?? [];
       trRef.current?.nodes([]);
-      const pad = 40;
-      const url = stage.toDataURL({
-        x: (b.x - pad) * camera.scale + camera.x,
-        y: (b.y - pad - 30) * camera.scale + camera.y,
-        width: (b.width + pad * 2) * camera.scale,
-        height: (b.height + pad * 2 + 30) * camera.scale,
-        pixelRatio: Math.min(4, 2 / camera.scale),
-      });
-      return url;
+      let ppu = opts?.pixelsPerUnit ?? 2;
+      ppu = Math.min(ppu, MAX_EXPORT_SIDE / rect.width, MAX_EXPORT_SIDE / rect.height, Math.sqrt(MAX_EXPORT_AREA / (rect.width * rect.height)));
+      const s = camera.scale;
+      try {
+        const url = stage.toDataURL({
+          x: rect.x * s + camera.x, y: rect.y * s + camera.y, width: rect.width * s, height: rect.height * s,
+          pixelRatio: ppu / s, mimeType: opts?.type ?? "image/png", quality: 0.92,
+        });
+        return { url, rect };
+      } finally {
+        trRef.current?.nodes(prevNodes);
+      }
     },
   }), [zoomAround, size, camera, elements, setCamera, toWorld]);
 
