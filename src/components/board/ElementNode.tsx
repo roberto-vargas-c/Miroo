@@ -165,6 +165,7 @@ type Props = {
   el: BoardElement;
   /** Show who created sticky notes. */
   showAuthor?: boolean;
+  dark?: boolean;
   /** Private mode: someone else's note, shown face-down. */
   hidden?: boolean;
   /** Measurement text for dimension / area elements. */
@@ -177,13 +178,13 @@ type Props = {
   editing: boolean;
   selected: boolean;
   onDragStart: (id: string) => void;
-  onDragMove: (id: string) => void;
+  onDragMove: (id: string, evt?: MouseEvent | PointerEvent | TouchEvent) => void;
   onDragEnd: (id: string) => void;
   onTransformEnd: (id: string) => void;
   onDblClick: (id: string) => void;
 };
 
-export function ElementNode({ el, showAuthor, hidden, measure, zoom = 1, editingCell, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
+export function ElementNode({ el, showAuthor, dark, hidden, measure, zoom = 1, editingCell, draggable, editing, onDragStart, onDragMove, onDragEnd, onTransformEnd, onDblClick }: Props) {
   const common = {
     id: el.id,
     name: "element",
@@ -194,7 +195,7 @@ export function ElementNode({ el, showAuthor, hidden, measure, zoom = 1, editing
     opacity: el.type === "pen" ? 1 : el.opacity ?? 1,
     draggable,
     onDragStart: () => onDragStart(el.id),
-    onDragMove: () => onDragMove(el.id),
+    onDragMove: (e: { evt?: MouseEvent | PointerEvent | TouchEvent }) => onDragMove(el.id, e.evt),
     onDragEnd: () => onDragEnd(el.id),
     onTransformEnd: () => onTransformEnd(el.id),
     onDblClick: () => onDblClick(el.id),
@@ -258,7 +259,7 @@ export function ElementNode({ el, showAuthor, hidden, measure, zoom = 1, editing
           <Rect width={el.width} height={el.height} fill={el.fill} stroke={el.stroke} strokeWidth={1.5} cornerRadius={6} listening={false}
             shadowColor="#0f172a" shadowOpacity={0.06} shadowBlur={8} />
           <Rect y={-30} width={Math.min(el.width, Math.max(80, (el.text?.length ?? 5) * 9 + 24))} height={26} fill="rgba(0,0,0,0)" />
-          {!editing && <Text y={-24} text={el.text || "Frame"} fontSize={15} fontStyle="600" fill="#475569" listening={false} />}
+          {!editing && <Text y={-24} text={el.text || "Frame"} fontSize={15} fontStyle="600" fill={dark ? "#94a3b8" : "#475569"} listening={false} />}
         </Group>
       );
     case "pen": {

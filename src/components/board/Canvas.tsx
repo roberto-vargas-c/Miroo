@@ -1,5 +1,7 @@
 "use client";
 
+import { withGroups } from "./arrange";
+import { useDarkMode } from "@/components/ThemeToggle";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Stage, Layer, Rect, Arrow, Transformer, Line, Group, Circle, Text as KText } from "react-konva";
 import type Konva from "konva";
@@ -146,6 +148,8 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const [editingId, setEditingId] = useState<string | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const shiftDown = useRef(false);
+  const [guides, setGuides] = useState<number[][]>([]);
+  const dark = useDarkMode();
   const [shiftHeld, setShiftHeld] = useState(false);
   // Ghost preview of what a click will put down: a picked sticker/doc, or the sticky, card, text or symbol tool.
   const [ghostPt, setGhostPt] = useState<{ x: number; y: number } | null>(null);
@@ -399,6 +403,12 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         return;
       }
       if ((e.key === "Delete" || e.key === "Backspace") && selection.length) { e.preventDefault(); api.remove(selection); setSelection([]); return; }
+      if (mod && e.key.toLowerCase() === "g" && selection.length) {
+        e.preventDefault();
+        const gid = e.shiftKey || selection.length < 2 ? undefined : `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        api.updateMany(selection.map((id) => ({ id, patch: { groupId: gid } })));
+        return;
+      }
       // Copy and paste go through the system clipboard events below, so a copy from another app wins.
       if (mod && e.key.toLowerCase() === "d") {
         const src = selection.map((id) => byId.get(id)!).filter(Boolean);
@@ -507,8 +517,10 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     if (tool === "select" || !canEdit) {
       const id = elementIdFromTarget(e.target);
       if (id) {
-        if (e.evt.shiftKey) setSelection(selection.includes(id) ? selection.filter((s) => s !== id) : [...selection, id]);
-        else if (!selection.includes(id)) setSelection([id]);
+        // Grouped items are picked up together.
+        const ids = withGroups([id], elements);
+        if (e.evt.shiftKey) setSelection(selection.includes(id) ? selection.filter((s) => !ids.includes(s)) : Array.from(new Set([...selection, ...ids])));
+        else if (!selection.includes(id)) setSelection(ids);
         return;
       }
       if (!e.evt.shiftKey) setSelection([]);
@@ -663,7 +675,8 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         const b = bounds(el);
         return el.type === "frame" ? contains(r, b) : intersects(r, b);
       }).map((el) => el.id);
-      setSelection(g.additive ? Array.from(new Set([...selection, ...hits])) : hits);
+      const grouped = withGroups(hits, elements);
+      setSelection(g.additive ? Array.from(new Set([...selection, ...grouped])) : grouped);
     } else if (g.kind === "shape") {
       let r = normRect(g.x0, g.y0, g.x1, g.y1);
       const el = makeElement(g.type, 0, 0);
@@ -805,11 +818,20 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     }
   };
 
-  const onDragMove = (id: string) => {
+  const onDragMove = (id: string, evt?: MouseEvent | PointerEvent | TouchEvent) => {
     const ds = dragState.current;
+    const node = stageRef.current?.findOne(`#${id}`);
+    // Smart guides: a single dragged item snaps to the edges and centers of other items (Alt drags freely).
+    if (node && selection.length <= 1 && !(evt && "altKey" in evt && evt.altKey)) {
+      const el = byId.get(id);
+      if (el && !el.rotation) {
+        const snap = snapToOthers({ x: node.x(), y: node.y(), width: el.width, height: el.height }, elements, id, 6 / camera.scale);
+        if (snap.dx || snap.dy) node.position({ x: node.x() + snap.dx, y: node.y() + snap.dy });
+        setGuides(snap.guides);
+      }
+    }
     const kids = ds?.children.get(id);
     if (!ds || !kids?.length) return;
-    const node = stageRef.current?.findOne(`#${id}`);
     const s = ds.start.get(id);
     if (!node || !s) return;
     const dx = node.x() - s.x, dy = node.y() - s.y;
@@ -821,6 +843,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   };
 
   const onDragEnd = (id: string) => {
+    setGuides([]);
     const stage = stageRef.current;
     const ds = dragState.current;
     const node = stage?.findOne(`#${id}`);
@@ -982,8 +1005,8 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       style={{
         cursor,
         touchAction: "none",
-        backgroundColor: "#f8fafc",
-        backgroundImage: s > 0.06 ? `radial-gradient(circle, #cbd5e1 ${dotR}px, transparent ${dotR + 0.5}px)` : undefined,
+        backgroundColor: dark ? "#12171e" : "#f8fafc",
+        backgroundImage: s > 0.06 ? `radial-gradient(circle, ${dark ? "#334155" : "#cbd5e1"} ${dotR}px, transparent ${dotR + 0.5}px)` : undefined,
         backgroundSize: `${gridSize}px ${gridSize}px`,
         backgroundPosition: `${camera.x}px ${camera.y}px`,
       }}
@@ -1012,7 +1035,8 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         onContextMenu={(e) => e.evt.preventDefault()}
       >
         <Layer>
-          {elements.map((el) => {
+          {elements.map((raw) => {
+            const el = dark ? forDark(raw) : raw;
             if (el.type === "connector") {
               const c = el as ConnectorElement;
               const { points: pts, bezier } = connectorPath(c, byId);
@@ -1025,7 +1049,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
               );
             }
             return (
-              <ElementNode key={el.id} el={el} showAuthor={props.showAuthors} measure={measureLabel(el)} zoom={s} editingCell={editingId === el.id ? editingCell : null} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
+              <ElementNode key={el.id} el={el} dark={dark} showAuthor={props.showAuthors} measure={measureLabel(el)} zoom={s} editingCell={editingId === el.id ? editingCell : null} selected={selection.includes(el.id)} editing={editingId === el.id && el.type !== "frame" ? true : editingId === el.id}
                 draggable={canEdit && tool === "select" && !spaceDown && !el.locked && editingId !== el.id && !onVote && !presenting}
                 hidden={hiddenIds?.has(el.id) ?? false}
                 onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onTransformEnd={onTransformEnd} onDblClick={startEdit} />
@@ -1100,6 +1124,9 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
                 text={gesture.points.length >= 4 ? "Double-click, press Enter or click the first point to finish" : "Click to add corners"} />
             </>
           )}
+          {guides.map((g, i) => (
+            <Line key={`guide${i}`} points={g} stroke="#e11d48" strokeWidth={1 / s} listening={false} />
+          ))}
           {ghostFor && ghostPt && !gesture && (
             <Group x={ghostPt.x} y={ghostPt.y} opacity={0.55} listening={false}>
               <ElementNode el={ghostFor} draggable={false} editing={false} selected={false} zoom={s}
@@ -1175,6 +1202,57 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
 });
 
 /** Copy elements with fresh ids, keeping connectors between copied elements attached to the copies. */
+type Box = { x: number; y: number; width: number; height: number };
+/**
+ * Snaps a box to the left/center/right and top/middle/bottom lines of the other items when one is within
+ * `thr`. Returns the nudge and the guide lines to draw (each [x1, y1, x2, y2]).
+ */
+function snapToOthers(b: Box, all: BoardElement[], skip: string, thr: number): { dx: number; dy: number; guides: number[][] } {
+  const others = all.filter((o) => o.id !== skip && o.type !== "connector" && !o.rotation && o.type !== "pen");
+  const xs = [b.x, b.x + b.width / 2, b.x + b.width], ys = [b.y, b.y + b.height / 2, b.y + b.height];
+  let bestX: { d: number; at: number } | null = null, bestY: { d: number; at: number } | null = null;
+  for (const o of others) {
+    for (const t of [o.x, o.x + o.width / 2, o.x + o.width]) for (const v of xs) {
+      const d = t - v;
+      if (Math.abs(d) <= thr && (!bestX || Math.abs(d) < Math.abs(bestX.d))) bestX = { d, at: t };
+    }
+    for (const t of [o.y, o.y + o.height / 2, o.y + o.height]) for (const v of ys) {
+      const d = t - v;
+      if (Math.abs(d) <= thr && (!bestY || Math.abs(d) < Math.abs(bestY.d))) bestY = { d, at: t };
+    }
+  }
+  const dx = bestX?.d ?? 0, dy = bestY?.d ?? 0;
+  const nb = { x: b.x + dx, y: b.y + dy, width: b.width, height: b.height };
+  const guides: number[][] = [];
+  const near = (v: number, list: number[]) => list.some((t) => Math.abs(t - v) < 0.5);
+  if (bestX) {
+    // Span the guide over the moved box and every item sharing that line.
+    const hits = others.filter((o) => near(bestX!.at, [o.x, o.x + o.width / 2, o.x + o.width]));
+    const y1 = Math.min(nb.y, ...hits.map((o) => o.y)), y2 = Math.max(nb.y + nb.height, ...hits.map((o) => o.y + o.height));
+    guides.push([bestX.at, y1 - 12, bestX.at, y2 + 12]);
+  }
+  if (bestY) {
+    const hits = others.filter((o) => near(bestY!.at, [o.y, o.y + o.height / 2, o.y + o.height]));
+    const x1 = Math.min(nb.x, ...hits.map((o) => o.x)), x2 = Math.max(nb.x + nb.width, ...hits.map((o) => o.x + o.width));
+    guides.push([x1 - 12, bestY.at, x2 + 12, bestY.at]);
+  }
+  return { dx, dy, guides };
+}
+
+const DARK_INK = new Set(["text", "pen", "dimension", "area", "cloud", "connector", "symbol"]);
+/** In dark mode, near-black lines and text are drawn light so they stay readable; white frames turn dark. Display only. */
+function forDark(el: BoardElement): BoardElement {
+  if (DARK_INK.has(el.type) && isDarkInk(el.stroke)) return { ...el, stroke: "#e5e7eb" };
+  if (el.type === "frame" && el.fill.toLowerCase() === "#ffffff") return { ...el, fill: "#1c232d", stroke: "#334155" };
+  return el;
+}
+function isDarkInk(c: string) {
+  const m = c.match(/^#([0-9a-f]{6})$/i);
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 70;
+}
+
 /** Clipboard type that marks a copy made on this board (the value matches the copy). */
 const SCHEMA_CLIP = "application/x-schema-elements";
 
