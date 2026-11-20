@@ -30,7 +30,7 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Tables: double-click a cell to edit, Tab moves to the next cell, add or remove rows and columns, optional header row
 - Mind maps (G): Tab adds a branch, Enter adds a sibling; branches are colored and connected automatically
 - Diagram shapes: triangle, hexagon, pentagon, parallelogram, trapezoid, database, star, block arrow, chevron, speech bubble, document, cross
-- Embeds: paste or add any link to get a preview card; YouTube, Vimeo, Loom and Figma open inline
+- Embeds: paste or add any link to get a preview card; YouTube, Vimeo, Loom, Figma and Keystone 3D models open inline
 
 **Export, import & history**
 - Export the board or the selection as PNG (standard or high resolution) or PDF
@@ -90,6 +90,17 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Folders to group a workspace's boards by project
 - Custom templates: save any board as a template for the whole workspace
 - Starred boards, filter by team, search
+
+**Keystone** ([the 3D design companion](https://github.com/roberto-vargas-c/keystone))
+- Live 3D models on the board: paste a Keystone embed link (`https://keystone.<subdomain>.workers.dev/embed/<token>`), or pick a project under *3D model from Keystone* in the embed dialog after **Connect Keystone** once. The model opens inline, to turn and zoom, and shows the building as the team changes it
+- Send to Schema: in Keystone, the boards' sheets and the project's views go onto a new or existing board, in a frame of their own next to what is there, with a link to the live model. Keystone asks once to connect your Schema account (*Allow* on Schema's `/connect/keystone` page); it can then see the boards you can edit, make boards and add pictures, nothing else
+- Profile → Connected apps lists both connections, each with Disconnect
+- Set `KEYSTONE_URL` to Keystone's address (on Cloudflare it is in `wrangler.jsonc`), and on Keystone `KEYSTONE_SCHEMA_URL` to Schema's
+
+For apps: `GET /api/apps/boards` (workspaces and the boards one can edit), `POST /api/apps/boards` `{ workspaceId, title }` and
+`POST /api/apps/boards/<id>/items` (a form with `title`, `file`… as PNG, JPEG or WebP, and optionally `link` and `linkTitle`) take
+`Authorization: Bearer sch_…`, the token an app gets from the code flow in `src/lib/apps.ts`. What an app adds goes through the
+board's live room (`server/room.ts` `drop`), so everyone with the board open sees it arrive.
 
 ## Stack
 

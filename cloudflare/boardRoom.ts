@@ -4,7 +4,8 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { makePrisma } from "../src/lib/prismaClient";
-import { verifyRealtime } from "../src/lib/token";
+import { INTERNAL_HEADER, internalKey, sameString, verifyRealtime } from "../src/lib/token";
+import type { BoardElement } from "../src/lib/board/types";
 import { Room, prismaStore, type Peer } from "../server/room";
 
 export type Env = {
@@ -32,7 +33,21 @@ export class BoardRoom extends DurableObject<Env> {
     return this.room;
   }
 
+  /** Elements from another app (POST /drop/<boardId> from the web app, never from the outside: the Worker only routes /realtime/). */
+  private async drop(req: Request, boardId: string) {
+    if (!sameString(req.headers.get(INTERNAL_HEADER) ?? "", await internalKey())) return new Response("Not allowed", { status: 403 });
+    const body = (await req.json().catch(() => null)) as { elements?: BoardElement[] } | null;
+    if (!Array.isArray(body?.elements)) return new Response("Bad request", { status: 400 });
+    const room = await this.getRoom(boardId);
+    const area = await room.drop(body.elements);
+    // Nobody has the board open: the room was only loaded for this, so let it go.
+    if (this.peers.size === 0) { room.destroy(); this.room = null; }
+    return Response.json(area);
+  }
+
   async fetch(req: Request) {
+    const path = new URL(req.url).pathname;
+    if (req.method === "POST" && path.startsWith("/drop/")) return this.drop(req, decodeURIComponent(path.slice(6)));
     if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("Expected a WebSocket", { status: 426 });
     const url = new URL(req.url);
     const boardId = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() ?? "");

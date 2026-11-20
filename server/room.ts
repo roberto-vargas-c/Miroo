@@ -9,6 +9,8 @@ import * as awarenessProtocol from "y-protocols/awareness";
 import * as encoding from "lib0/encoding";
 import * as decoding from "lib0/decoding";
 import type { RealtimeClaims } from "../src/lib/token";
+import type { BoardElement } from "../src/lib/board/types";
+import { dropElements } from "../src/lib/board/drop";
 
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
@@ -90,6 +92,13 @@ export class Room {
       console.error(`[realtime] failed to save board ${this.boardId}`, e);
       this.dirty = true;
     }
+  }
+
+  /** Elements another app sends in (laid out from 0, 0): placed next to the board's contents and saved at once. */
+  async drop(elements: BoardElement[]) {
+    const area = dropElements(this.doc, elements);
+    await this.save();
+    return area;
   }
 
   /** Add a client: greet it with our state vector and the current awareness, then replay what it already sent. */

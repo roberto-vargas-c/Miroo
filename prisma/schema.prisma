@@ -60,6 +60,8 @@ model User {
   stars       BoardStar[]
   folderStars FolderStar[]
   miro        MiroConnection[]
+  appTokens   AppToken[]
+  keystone    KeystoneConnection?
 }
 
 model Workspace {
@@ -366,4 +368,36 @@ model AuditEvent {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
+}
+
+/// An app the person connected to their Schema account ("Allow Keystone to add to your boards").
+/// Only a hash of the token is stored; the app holds the token itself.
+model AppToken {
+  id         String    @id @default(cuid())
+  userId     String
+  /// Which app: "keystone"
+  app        String
+  tokenHash  String    @unique
+  /// The one-time code the token was traded for, so a code can't be used twice
+  codeId     String    @unique
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// The person's Keystone account, connected from a board ("Add a Keystone model"). One per person.
+model KeystoneConnection {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  /// Sealed with secretBox (AES-GCM keyed from AUTH_SECRET)
+  tokenEnc     String
+  accountName  String?
+  accountEmail String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

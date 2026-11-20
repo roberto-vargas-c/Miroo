@@ -9,7 +9,7 @@ import "dotenv/config";
 import http from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { makePrisma } from "../src/lib/prismaClient";
-import { verifyRealtime } from "../src/lib/token";
+import { INTERNAL_HEADER, internalKey, sameString, verifyRealtime } from "../src/lib/token";
 import { Room, prismaStore, type Peer } from "./room";
 
 const prisma = makePrisma(process.env.DATABASE_URL ?? "");
@@ -70,7 +70,32 @@ async function onConnection(ws: WebSocket, req: http.IncomingMessage) {
 }
 
 const port = Number(process.env.REALTIME_PORT ?? process.env.PORT ?? 1234);
-const server = http.createServer((_req, res) => {
+/** POST /drop/<boardId> from the web app: elements another app sends in, placed in the live room (or the saved board). */
+async function onDrop(req: http.IncomingMessage, res: http.ServerResponse, boardId: string) {
+  const reply = (status: number, body: unknown) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+  if (!sameString(String(req.headers[INTERNAL_HEADER] ?? ""), await internalKey())) return reply(403, { error: "Not allowed" });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) { size += (c as Buffer).length; if (size > 4 * 1024 * 1024) return reply(413, { error: "Too large" }); chunks.push(c as Buffer); }
+  let elements: unknown;
+  try { elements = JSON.parse(Buffer.concat(chunks).toString("utf8")).elements; } catch { return reply(400, { error: "Bad request" }); }
+  if (!Array.isArray(elements)) return reply(400, { error: "Bad request" });
+  const live = rooms.has(boardId);
+  const room = await getRoom(boardId);
+  const area = await room.drop(elements);
+  if (!live && room.conns.size === 0) { rooms.delete(boardId); room.destroy(); }
+  reply(200, area);
+}
+
+const server = http.createServer((req, res) => {
+  const m = req.method === "POST" ? (req.url ?? "").match(/^\/drop\/([^/?#]+)/) : null;
+  if (m) {
+    onDrop(req, res, decodeURIComponent(m[1])).catch((e) => {
+      console.error("[realtime] drop failed", e);
+      if (!res.headersSent) { res.writeHead(500); res.end(); }
+    });
+    return;
+  }
   res.writeHead(200, { "content-type": "text/plain" });
   res.end("realtime ok");
 });

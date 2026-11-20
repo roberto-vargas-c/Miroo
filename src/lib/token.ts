@@ -57,3 +57,22 @@ export async function verifyRealtime(token: string): Promise<RealtimeClaims | nu
     return null;
   }
 }
+
+/** Header that lets the web app hand elements to a board's live room (the realtime server or Durable Object). */
+export const INTERNAL_HEADER = "x-schema-internal";
+
+/** The value of INTERNAL_HEADER: derived from AUTH_SECRET, so only this deployment's web app knows it. */
+export async function internalKey() {
+  const s = process.env.AUTH_SECRET;
+  if (!s || s === "change-me") throw new Error("AUTH_SECRET is not set");
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`schema-internal:${s}`));
+  return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Compares two strings without leaking where they differ. */
+export function sameString(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}

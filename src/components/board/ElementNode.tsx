@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Konva from "konva";
 import { loadGif, type GifFrames } from "./gif";
+import { isKeystoneEmbed } from "./embeds";
 import { stickerUrl } from "@/lib/board/stickers";
 import { Group, Rect, Text, Ellipse, Line, Image as KImage, Path, Label as KLabel, Tag } from "react-konva";
 import type {
@@ -450,7 +451,8 @@ export function ElementNode({ el, showAuthor, dark, hidden, measure, zoom = 1, e
       const e = el as EmbedElement;
       const video = /youtube\.com|youtu\.be|vimeo\.com|loom\.com/.test(e.url);
       const file = e.url.startsWith("/api/assets/");
-      const icon = file ? "📄" : video ? "▶" : /figma\.com/.test(e.url) ? "✦" : /maps\.|goo\.gl\/maps/.test(e.url) ? "⌖" : "🔗";
+      const keystone = isKeystoneEmbed(e.url);
+      const icon = file ? "📄" : video ? "▶" : keystone ? "⬢" : /figma\.com/.test(e.url) ? "✦" : /maps\.|goo\.gl\/maps/.test(e.url) ? "⌖" : "🔗";
       return (
         <Group {...common}>
           <Rect width={el.width} height={el.height} fill="#ffffff" stroke={el.stroke} cornerRadius={10}
