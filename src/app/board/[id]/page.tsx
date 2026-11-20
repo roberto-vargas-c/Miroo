@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { boardAndAccess } from "@/lib/boardAccess";
 import { BoardApp } from "@/components/board/BoardApp";
 import { aiEnabled } from "@/lib/ai";
+import { boardAccessForUser } from "@/lib/permissions";
+import { loadSidebar } from "@/lib/sidebar";
 
 export default async function BoardPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ share?: string }> }) {
   const { id } = await params;
@@ -20,6 +22,10 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
     ? (await db.workspaceMember.findMany({ where: { workspaceId: board.workspaceId }, select: { user: { select: { id: true, name: true, color: true } } } }))
         .map((m) => m.user).sort((a, b) => a.name.localeCompare(b.name))
     : [];
+  const sidebar = user && access.role ? await loadSidebar(board.workspaceId, user, access.role) : null;
+  // Starring needs workspace access to the board, not only a share link.
+  const canStar = !!user && !!access.role && (await boardAccessForUser(user.id, board)).canView;
+  const starred = canStar && !!(await db.boardStar.findUnique({ where: { userId_boardId: { userId: user!.id, boardId: board.id } } }));
   return (
     <BoardApp
       boardId={board.id}
@@ -34,6 +40,8 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
       members={members}
       realtimeUrl={process.env.NEXT_PUBLIC_REALTIME_URL || "ws://localhost:1234"}
       ai={aiEnabled()}
+      sidebar={sidebar}
+      starred={canStar ? starred : null}
     />
   );
 }
