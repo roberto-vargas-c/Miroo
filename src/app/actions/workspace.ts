@@ -372,12 +372,28 @@ export async function deleteBoard(boardId: string) {
 
 export async function toggleStar(boardId: string) {
   const user = await requireUser();
+  const b = await db.board.findUnique({ where: { id: boardId }, select: { id: true, workspaceId: true, teamId: true, visibility: true, createdById: true } });
+  if (!b || !(await boardAccessForUser(user.id, b)).canView) return;
   const key = { userId_boardId: { userId: user.id, boardId } };
   const existing = await db.boardStar.findUnique({ where: key });
   if (existing) await db.boardStar.delete({ where: key });
   else await db.boardStar.create({ data: { userId: user.id, boardId } });
-  const b = await db.board.findUnique({ where: { id: boardId }, select: { workspaceId: true } });
-  if (b) revalidatePath(`/w/${b.workspaceId}`);
+  // The sidebar lists starred boards on every workspace page and inside boards.
+  revalidatePath(`/w/${b.workspaceId}`, "layout");
+  revalidatePath(`/board/${boardId}`);
+}
+
+/** Star or unstar a folder (project) for the current user. */
+export async function toggleFolderStar(folderId: string) {
+  const user = await requireUser();
+  const f = await db.folder.findUnique({ where: { id: folderId }, select: { workspaceId: true } });
+  if (!f || !(await workspaceRole(user.id, f.workspaceId))) return;
+  const key = { userId_folderId: { userId: user.id, folderId } };
+  const existing = await db.folderStar.findUnique({ where: key });
+  if (existing) await db.folderStar.delete({ where: key });
+  else await db.folderStar.create({ data: { userId: user.id, folderId } });
+  revalidatePath(`/w/${f.workspaceId}`, "layout");
+  revalidatePath("/board/[id]", "page");
 }
 
 export async function updateBoardSharing(

@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse, MoreHorizontal } from "lucide-react";
+import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse, MoreHorizontal, Star } from "lucide-react";
 import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle, type DocElement, docFragment } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
@@ -12,6 +12,8 @@ import { ArchToolbar } from "./ArchToolbar";
 import { ScaleDialog } from "./ScaleDialog";
 import { createBoard, deleteBoard, duplicateBoard, moveBoardToFolder, renameBoard, toggleStar } from "@/app/actions/workspace";
 import { useBoardPrefs } from "./boardPrefs";
+import { SidebarDrawer, SidebarToggleButton, useSidebarShortcut } from "@/components/AppSidebar";
+import type { SidebarData } from "@/lib/sidebar";
 import { LogoMark } from "@/components/Logo";
 import { Avatar } from "@/components/Avatar";
 import * as Y from "yjs";
@@ -53,8 +55,10 @@ export type BoardAppProps = {
   ai?: boolean;
   /** Workspace members, for assigning task cards. */
   members: { id: string; name: string; color: string }[];
-  /** The signed-in viewer starred this board. */
-  starred?: boolean;
+  /** The app sidebar (Home, Starred, Projects…), for workspace members. */
+  sidebar?: SidebarData | null;
+  /** Whether the viewer starred this board; null when they can't star it. */
+  starred?: boolean | null;
   /** Workspace folders, for "Move to". */
   folders?: { id: string; name: string }[];
   /** Shown in Board › Details (workspace members only). */
@@ -76,6 +80,11 @@ export function BoardApp(p: BoardAppProps) {
   const [selection, setSelectionState] = useState<string[]>([]);
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, scale: 1 });
   const [title, setTitle] = useState(p.title);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  useSidebarShortcut(() => { if (p.sidebar) setSidebarOpen((o) => !o); });
+  const [starred, setStarred] = useState(!!p.starred);
+  useEffect(() => setStarred(!!p.starred), [p.starred]);
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentDraft, setCommentDraft] = useState<{ x: number; y: number } | null>(null);
@@ -93,7 +102,6 @@ export function BoardApp(p: BoardAppProps) {
     setPref("wheelMode", next);
     setToast(`Scroll wheel: ${WHEEL_LABEL[next]}`);
   };
-  const [starred, setStarred] = useState(!!p.starred);
   const [folderId, setFolderId] = useState(p.details?.folderId ?? null);
   const [infoDialog, setInfoDialog] = useState<"shortcuts" | "details" | null>(null);
   const [highlightWidth, setHighlightWidth] = useState(18);
@@ -332,7 +340,7 @@ export function BoardApp(p: BoardAppProps) {
         .catch(fail("move the board"));
     } : undefined,
     starred,
-    onToggleStar: member ? () => {
+    onToggleStar: member && p.starred != null ? () => {
       setStarred((v) => !v);
       toggleStar(p.boardId).catch((e) => { setStarred((v) => !v); fail("star the board")(e); });
     } : undefined,
@@ -948,13 +956,16 @@ export function BoardApp(p: BoardAppProps) {
         <div className="pointer-events-none absolute bottom-36 left-1/2 z-40 max-w-[calc(100vw-24px)] -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-center text-sm text-white shadow-lg sm:bottom-20">{toast}</div>
       )}
 
+      {p.sidebar && <SidebarDrawer data={p.sidebar} open={sidebarOpen && !presenting} onClose={closeSidebar} currentBoardId={p.boardId} />}
       {!presenting && <>
       {/* Top bar */}
       <header className="absolute left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex items-center gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-1 rounded-xl sm:flex-none border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
-          <Link href={p.workspaceId ? `/w/${p.workspaceId}` : "/w"} className="btn-ghost p-1.5" title="Back to boards">
-            <ChevronLeft size={18} /><LogoMark size={22} />
-          </Link>
+          {p.sidebar ? <SidebarToggleButton onClick={() => setSidebarOpen(true)} /> : (
+            <Link href={p.workspaceId ? `/w/${p.workspaceId}` : "/w"} className="btn-ghost p-1.5" title="Back to boards">
+              <ChevronLeft size={18} /><LogoMark size={22} />
+            </Link>
+          )}
           <input
             className="w-0 min-w-0 flex-1 rounded-md bg-transparent px-1 py-1 text-sm font-medium sm:w-auto sm:max-w-[40vw] sm:flex-none sm:px-2 outline-none hover:bg-slate-50 focus:bg-slate-50"
             value={title}
@@ -963,6 +974,13 @@ export function BoardApp(p: BoardAppProps) {
             onBlur={() => { if (title.trim() && title !== p.title) renameBoard(p.boardId, title).catch(() => setTitle(p.title)); }}
             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           />
+          {p.starred != null && (
+            <button type="button" className={`btn-ghost shrink-0 p-1.5 ${starred ? "text-amber-500 hover:text-amber-600" : "text-slate-400"}`}
+              title={starred ? "Unstar this board" : "Star this board"} aria-label={starred ? "Unstar this board" : "Star this board"} aria-pressed={starred}
+              onClick={() => { setStarred((v) => !v); toggleStar(p.boardId).catch(() => setStarred((v) => !v)); }}>
+              <Star size={16} fill={starred ? "currentColor" : "none"} />
+            </button>
+          )}
           <span className={`mx-1 h-2 w-2 shrink-0 rounded-full ${status === "connected" ? "bg-emerald-500" : "bg-amber-400"}`}
             title={status === "connected" ? "Live" : "Reconnecting…"} />
           {!canEdit && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">View only</span>}
