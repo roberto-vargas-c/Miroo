@@ -132,6 +132,8 @@ const TEXT_TYPES = new Set<ElementType>(["sticky", "rect", "ellipse", "diamond",
 
 type Gesture =
   | { kind: "pan"; startX: number; startY: number; cam: Camera }
+  /** A finger (or pen) holding a picked item: the ghost follows it and lifting puts it down. */
+  | { kind: "place" }
   | { kind: "marquee"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: "shape"; type: ElementType; x0: number; y0: number; x1: number; y1: number }
   | { kind: "connector"; fromId?: string; x0: number; y0: number; x1: number; y1: number }
@@ -178,6 +180,20 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.placing, tool, placingSymbol, canEdit, boardScale, elements.length]);
+  // Touch screens have no hover: show a freshly picked item in the middle of the view so it is
+  // visible before it is put down. A mouse shows it under the pointer as soon as it moves.
+  const lastPointerType = useRef("mouse");
+  useEffect(() => {
+    const f = (e: PointerEvent) => { lastPointerType.current = e.pointerType; };
+    window.addEventListener("pointerdown", f, true);
+    return () => window.removeEventListener("pointerdown", f, true);
+  }, []);
+  useEffect(() => {
+    if (!props.placing || lastPointerType.current === "mouse") return;
+    const c = cameraRef.current;
+    setGhostPt({ x: (size.width / 2 - c.x) / c.scale, y: (size.height / 2 - c.y) / c.scale });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.placing]);
   /** Element under the pointer while the connector tool is active (its connection points are shown). */
   const [hoverId, setHoverId] = useState<string | null>(null);
   useEffect(() => { if (tool !== "connector") setHoverId(null); }, [tool]);
@@ -498,14 +514,19 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   const onPointerDown = (e: KonvaEventObject<PointerEvent>) => {
     if (pinching()) return;
     const p = pointerWorld();
-    if (p && props.placing && canEdit && e.evt.button === 0) { props.onPlace?.(p); return; }
+    if (p && props.placing && canEdit && e.evt.button === 0) {
+      // Touch has no hover, so the ghost follows the finger and lifting it puts the item down.
+      if (e.evt.pointerType !== "mouse") { setGhostPt(p); setGesture({ kind: "place" }); return; }
+      props.onPlace?.(p); return;
+    }
     const sp = stageRef.current?.getPointerPosition();
     if (!p || !sp) return;
     if (editingId) commitEdit();
     const isTransformerPart = e.target.getParent()?.className === "Transformer";
     if (isTransformerPart) return;
 
-    if (tool === "hand" || spaceDown || e.evt.button === 1) {
+    // Hand tool, space, or holding the middle or right mouse button pans.
+    if (tool === "hand" || spaceDown || e.evt.button === 1 || e.evt.button === 2) {
       onManualCamera?.();
       setGesture({ kind: "pan", startX: sp.x, startY: sp.y, cam: camera });
       return;
@@ -602,6 +623,16 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     }
   };
 
+  // A pan with the right or middle button can end outside the board (or the window).
+  const panning = gesture?.kind === "pan";
+  useEffect(() => {
+    if (!panning) return;
+    const end = () => setGesture(null);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("blur", end);
+    return () => { window.removeEventListener("pointerup", end); window.removeEventListener("blur", end); };
+  }, [panning]);
+
   const lastCursor = useRef(0);
   const onPointerMove = () => {
     if (pinch.current.start) return;
@@ -651,6 +682,11 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
     if (g?.kind === "area") return; // areas are finished with a double-click, Enter, or by clicking the first point
     setGesture(null);
     if (!g) return;
+    if (g.kind === "place") {
+      const p = pointerWorld() ?? ghostPt;
+      if (p && props.placing) props.onPlace?.(p);
+      return;
+    }
     if (g.kind === "line") {
       const len = Math.hypot(g.x1 - g.x0, g.y1 - g.y0);
       if (len < 5 / camera.scale) return;
@@ -997,7 +1033,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   };
 
   // ── Render ───────────────────────────────────────────────────────────────
-  const cursor = tool === "hand" || spaceDown ? (gesture?.kind === "pan" ? "grabbing" : "grab") : tool === "select" ? "default" : "crosshair";
+  const cursor = gesture?.kind === "pan" ? "grabbing" : tool === "hand" || spaceDown ? "grab" : tool === "select" ? "default" : "crosshair";
   const s = camera.scale;
   // Grid dots shrink with the zoom, and the spacing doubles when they'd get too dense.
   let gridSize = 24 * s;
@@ -1148,7 +1184,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
           {guides.map((g, i) => (
             <Line key={`guide${i}`} points={g} stroke="#e11d48" strokeWidth={1 / s} listening={false} />
           ))}
-          {ghostFor && ghostPt && !gesture && (
+          {ghostFor && ghostPt && (!gesture || gesture.kind === "place") && (
             <Group x={ghostPt.x} y={ghostPt.y} opacity={0.55} listening={false}>
               <ElementNode el={ghostFor} draggable={false} editing={false} selected={false} zoom={s}
                 onDragStart={() => {}} onDragMove={() => {}} onDragEnd={() => {}} onTransformEnd={() => {}} onDblClick={() => {}} />
