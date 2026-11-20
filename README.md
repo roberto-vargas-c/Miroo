@@ -9,7 +9,7 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Infinite canvas with pan (two-finger scroll, space+drag, hand tool, middle mouse) and zoom (mouse wheel, pinch on trackpads and iPad, zoom controls, fit to content). The wheel button next to the zoom controls switches the scroll wheel between auto, always zoom and always pan
 - Sticky notes, rectangles, ellipses, diamonds, free text, frames
 - Freehand pen and highlighter with 8 / 4 thicknesses, color swatches, a color wheel and an eyedropper (picks from anywhere on screen in Chrome and Edge, from the board elsewhere). Hold Shift for a straight line
-- Drop, paste or upload many files at once: images, animated GIFs (they play on the board), PDFs (one image per page) and videos (MP4, WebM, MOV; play in place or full screen)
+- Drop, paste or upload many files at once: images, animated GIFs (they play on the board), PDFs (one image per page), videos (MP4, WebM, MOV; play in place or full screen) and any other file (a card that downloads it), up to 25 MB each
 - Image quality (Original, High 2560 px, Medium 1600 px, Low 1024 px): pick it on selected pictures or PDF pages to make them lighter; new uploads and PDF imports use the same setting
 - Images and PDF pages: mirror horizontally or vertically, crop (free or 1:1, 4:3, 16:9, 3:4)
 - Transparency for shapes, images, stickers and strokes
@@ -36,6 +36,7 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Export the board or the selection as PNG (standard or high resolution) or PDF
 - Export frames as PDF pages, one per frame, sized 1 board unit = 1 pt, so plans imported from a PDF print at their original paper size and scale
 - Paste text from Miro or any other app: each copied sticky note, line or paragraph becomes its own sticky note
+- Paste pictures, PDFs, videos and other files copied in Miro: Miro's clipboard only names them, so Schema downloads them through Miro's API with your access token (asked once, kept in your browser if you choose). Pictures in HTML copied from web pages and docs come over too
 - Import a whole Miro board (board menu → Import from Miro): sticky notes, shapes, text, frames, cards, images, links and connectors keep their positions and colors. It uses Miro's REST API with your own access token (create an app in Miro with `boards:read` and install it to get one); the token is used for that import only and isn't stored
 - Import a CSV (or TSV) as sticky notes, task cards (reads title, status, assignee and due date columns) or a table
 - Version history: an automatic snapshot every 10 minutes of editing, named versions, preview any version, restore it (the current board is saved first, and the restore can be undone)

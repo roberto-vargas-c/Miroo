@@ -4,10 +4,12 @@ import { db } from "@/lib/db";
 import { boardAndAccess } from "@/lib/boardAccess";
 import { BUCKET_MAX_BYTES, DB_MAX_BYTES, IMAGE_TYPES, VIDEO_TYPES, mediaBucket } from "@/lib/media";
 
-const TYPES = new Set([...IMAGE_TYPES, ...VIDEO_TYPES]);
+const MEDIA = new Set([...IMAGE_TYPES, ...VIDEO_TYPES]);
+/** Media types as sent, anything else kept as a plain download (see the asset route). */
+const typeOf = (t: string) => (MEDIA.has(t) || /^[a-z]+\/[a-z0-9.+-]+$/.test(t) ? t : "application/octet-stream");
 const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
 
-// Uploads an image or a video for a board. The body is either the raw file (with its type as the
+// Uploads a file for a board: an image, a video or any other file (kept as a download). The body is either the raw file (with its type as the
 // content-type, which lets big videos stream straight into object storage) or a form with "file".
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -19,16 +21,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (ctype === "multipart/form-data") {
     const file = (await req.formData()).get("file");
     if (!(file instanceof File)) return NextResponse.json({ error: "No file" }, { status: 400 });
-    type = file.type; size = file.size;
-    if (TYPES.has(type) && size <= BUCKET_MAX_BYTES) bytes = await file.arrayBuffer();
+    type = typeOf((file.type || "application/octet-stream").toLowerCase()); size = file.size;
+    if (size <= BUCKET_MAX_BYTES) bytes = await file.arrayBuffer();
   } else {
-    type = ctype;
+    type = typeOf(ctype || "application/octet-stream");
     size = Number(req.headers.get("content-length") ?? NaN);
     if (!Number.isFinite(size)) return NextResponse.json({ error: "Missing file size" }, { status: 411 });
     body = req.body;
-  }
-  if (!TYPES.has(type)) {
-    return NextResponse.json({ error: "Supported files are PNG, JPEG, GIF and WebP images, and MP4, WebM and MOV videos" }, { status: 415 });
   }
 
   const bucket = mediaBucket();

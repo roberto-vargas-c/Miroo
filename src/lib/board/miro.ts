@@ -238,3 +238,75 @@ export function pastedNotes(plain: string, html?: string): string[] {
   const parts = text.includes("\n\n") ? text.split(/\n\s*\n/) : text.split("\n");
   return parts.map((t) => t.trim()).filter(Boolean).slice(0, 200);
 }
+
+/** Something copied in Miro that carries a file (picture, PDF, video, other document). */
+export type MiroClipFile = {
+  /** Miro's id for the item on its board (used with the REST API). */
+  itemId: string;
+  kind: string;
+  name?: string;
+  /** Size on the Miro board, when known. */
+  width?: number;
+  height?: number;
+};
+
+/** What Miro's own clipboard payload says about a copy. */
+export type MiroClip = { boardId: string | null; files: MiroClipFile[]; widgetTypes: string[] };
+
+/** Widgets that hold only text or drawing; everything else may carry a file. */
+const MIRO_TEXT_WIDGETS = new Set(["sticker", "shape", "text", "line", "paint", "frame", "grid_text", "data_table_widget", "card", "mindmap_node", "kanban", "comment"]);
+
+/**
+ * Reads the payload Miro puts in the copied HTML: `data-meta="<--(miro-data-v1)BASE64(/miro-data-v1)-->"`.
+ * The base64 bytes are the payload's UTF-8 JSON with every byte shifted by 59.
+ */
+export function decodeMiroClipboard(html: string | undefined): MiroClip | null {
+  const m = html?.match(/\(miro-data-v1\)([A-Za-z0-9+/=\s]+?)\(\/miro-data-v1\)/);
+  if (!m) return null;
+  let doc: { boardId?: string; data?: { objects?: unknown[] } };
+  try {
+    const bin = atob(m[1].replace(/\s+/g, ""));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = (bin.charCodeAt(i) - 59 + 256) & 255;
+    doc = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+  const files: MiroClipFile[] = [];
+  const widgetTypes: string[] = [];
+  for (const raw of doc.data?.objects ?? []) {
+    const o = raw as { initialId?: string | number; widgetData?: { type?: string; json?: unknown } };
+    const type = o.widgetData?.type;
+    if (!type) continue;
+    widgetTypes.push(type);
+    if (MIRO_TEXT_WIDGETS.has(type) || o.initialId == null) continue;
+    let j: Record<string, unknown> = {};
+    try { j = (typeof o.widgetData!.json === "string" ? JSON.parse(o.widgetData!.json) : o.widgetData!.json) ?? {}; } catch { /* keep the id */ }
+    const res = (j.resource ?? {}) as Record<string, unknown>;
+    const size = (j.size ?? {}) as { width?: number; height?: number };
+    const scale = Number((j.scale as { scale?: number } | undefined)?.scale) || 1;
+    const name = [res.name, j.title, j.name, res.title].find((v): v is string => typeof v === "string" && !!v.trim());
+    files.push({
+      itemId: String(o.initialId),
+      kind: type,
+      name: name ? htmlToText(name) : undefined,
+      width: Number(size.width) ? Number(size.width) * scale : undefined,
+      height: Number(size.height) ? Number(size.height) * scale : undefined,
+    });
+  }
+  return { boardId: typeof doc.boardId === "string" && doc.boardId ? doc.boardId : null, files, widgetTypes };
+}
+
+/** Picture sources in copied HTML (from browsers, docs, Miro's fallback HTML), skipping tracking pixels. */
+export function htmlImageSources(html: string | undefined): string[] {
+  if (!html) return [];
+  const out: string[] = [];
+  for (const m of html.matchAll(/<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi)) {
+    const tag = m[0];
+    const src = (m[1] ?? m[2] ?? m[3] ?? "").replace(/&amp;/g, "&").trim();
+    if (!/^(https?:|data:image\/)/i.test(src)) continue;
+    if (/\b(width|height)\s*=\s*["']?1["'\s>]/i.test(tag)) continue;
+    if (!out.includes(src)) out.push(src);
+  }
+  return out.slice(0, 50);
+}

@@ -1,5 +1,8 @@
 import { db } from "@/lib/db";
-import { mediaBucket, parseRange } from "@/lib/media";
+import { IMAGE_TYPES, VIDEO_TYPES, mediaBucket, parseRange } from "@/lib/media";
+
+/** Shown in the browser; anything else (HTML, SVG, scripts, archives…) is only ever downloaded. */
+const INLINE = new Set([...IMAGE_TYPES, ...VIDEO_TYPES, "application/pdf"]);
 
 // Asset ids are 128-bit random values, so the URL itself acts as the capability to read it.
 // Byte ranges are supported so videos can seek without downloading the whole file.
@@ -7,8 +10,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ aid: str
   const { aid } = await params;
   const meta = await db.asset.findUnique({ where: { id: aid }, select: { mimeType: true, storage: true, size: true } });
   if (!meta) return new Response("Not found", { status: 404 });
+  const inline = INLINE.has(meta.mimeType);
+  const name = (new URL(req.url).searchParams.get("name") ?? "").replace(/[\r\n"\\]/g, "").slice(0, 200);
   const headers: Record<string, string> = {
-    "content-type": meta.mimeType,
+    "content-type": inline ? meta.mimeType : "application/octet-stream",
+    "x-content-type-options": "nosniff",
+    ...(!inline || name ? { "content-disposition": `${inline ? "inline" : "attachment"}${name ? `; filename*=UTF-8''${encodeURIComponent(name)}` : ""}` } : {}),
     "cache-control": "private, max-age=31536000, immutable",
     "accept-ranges": "bytes",
   };
