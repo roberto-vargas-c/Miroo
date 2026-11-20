@@ -1,26 +1,120 @@
 "use client";
-import { useState } from "react";
-import { X, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { X, Loader2, Link2, Unlink } from "lucide-react";
 import type { BoardElement, ConnectorElement } from "@/lib/board/types";
 
-/** Imports a whole Miro board through Miro's API with the person's own access token (used once, not stored). */
+type MiroConnection = { id: string; teamId: string; teamName: string | null };
+
+/** The Miro teams this person connected with "Connect Miro", and whether the server offers it. */
+export function useMiroConnections() {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [connections, setConnections] = useState<MiroConnection[]>([]);
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/miro/connections", { cache: "no-store" });
+      if (!res.ok) { setAvailable(false); return; }
+      const j = await res.json();
+      setAvailable(!!j.available);
+      setConnections(j.connections ?? []);
+    } catch { setAvailable(false); }
+  }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  /** Opens Miro's sign-in in a small window; resolves true once a team is connected. */
+  const connect = useCallback(() => new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    const w = window.open("/api/miro/connect?popup=1", "schema-miro-connect", "width=640,height=780");
+    if (!w) {
+      // Popup blocked: go through the sign-in in this tab and come back here.
+      window.location.href = `/api/miro/connect?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      return;
+    }
+    let done = false;
+    const finish = (r: { ok: boolean; error?: string }) => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("message", onMessage);
+      clearInterval(timer);
+      refresh().then(() => resolve(r));
+    };
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin || e.data?.type !== "schema-miro-connect") return;
+      finish({ ok: !!e.data.ok, error: e.data.error });
+    };
+    window.addEventListener("message", onMessage);
+    const timer = setInterval(() => { if (w.closed) finish({ ok: false }); }, 700);
+  }), [refresh]);
+
+  const disconnect = useCallback(async (id: string) => {
+    await fetch(`/api/miro/connections?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+    await refresh();
+  }, [refresh]);
+
+  return { available, connections, connect, disconnect, refresh };
+}
+
+/** "Connect Miro" button, or the connected teams with a way to add another or disconnect. */
+export function MiroAccount({ miro, onConnected }: { miro: ReturnType<typeof useMiroConnections>; onConnected?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true); setError(null);
+    const r = await miro.connect();
+    setBusy(false);
+    if (r.ok) onConnected?.();
+    else if (r.error) setError(r.error);
+  };
+  if (!miro.connections.length) {
+    return (
+      <div className="space-y-2">
+        <button type="button" className="btn-primary w-full justify-center" onClick={go} disabled={busy}>
+          {busy ? <><Loader2 size={16} className="animate-spin" /> Waiting for Miro…</> : <><Link2 size={16} /> Connect Miro</>}
+        </button>
+        <p className="text-xs text-slate-500">Sign in to Miro once and pick your team. Schema keeps the connection for your next paste or import.</p>
+        {error && <p className="text-sm text-rose-600">{error}</p>}
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+      <p className="font-medium text-slate-700">Connected to Miro</p>
+      <ul className="mt-1 space-y-1">
+        {miro.connections.map((c) => (
+          <li key={c.id} className="flex items-center justify-between gap-2">
+            <span className="truncate">{c.teamName ?? "Miro team"}</span>
+            <button type="button" className="btn-ghost px-2 py-0.5 text-xs" onClick={() => miro.disconnect(c.id)} title="Disconnect"><Unlink size={14} /> Disconnect</button>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="mt-2 text-xs font-medium text-teal-700 hover:underline disabled:opacity-50" onClick={go} disabled={busy}>
+        {busy ? "Waiting for Miro…" : "Connect another Miro team"}
+      </button>
+      {error && <p className="mt-1 text-sm text-rose-600">{error}</p>}
+    </div>
+  );
+}
+
+/** Imports a whole Miro board through Miro's API, with the connected Miro account or a token pasted by hand. */
 export function MiroDialog({ boardId, q, at, onImport, onClose }: {
   boardId: string; q: string; at: { x: number; y: number };
   onImport: (els: BoardElement[], note: string) => void; onClose: () => void;
 }) {
+  const miro = useMiroConnections();
   const [link, setLink] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const oauth = miro.available === true;
+  const ready = !oauth || miro.connections.length > 0 || token.trim().length > 0;
 
   const run = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(null);
     try {
       const res = await fetch(`/api/boards/${boardId}/import/miro${q}`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ link, token }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ link, token: token.trim() || undefined }),
       });
       const j = await res.json().catch(() => ({}));
+      if (j.needsConnect) miro.refresh();
       if (!res.ok) throw new Error(j.error ?? "Import failed");
       const els = j.elements as BoardElement[];
       if (!els.length) throw new Error("That board has nothing Schema can import");
@@ -62,18 +156,32 @@ export function MiroDialog({ boardId, q, at, onImport, onClose }: {
           <input id="miro-link" className="input" value={link} onChange={(e) => setLink(e.target.value)} required autoFocus
             placeholder="https://miro.com/app/board/…" />
         </div>
-        <div>
-          <label className="label" htmlFor="miro-token">Miro access token</label>
-          <input id="miro-token" className="input font-mono" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} required />
-          <p className="mt-1 text-xs text-slate-500">Used for this import only. It isn&apos;t saved.</p>
-        </div>
-        <MiroTokenHelp />
+        {oauth && <MiroAccount miro={miro} />}
+        {miro.available !== null && (oauth ? (
+          <details className="text-sm text-slate-600">
+            <summary className="cursor-pointer text-slate-500">Use an access token instead</summary>
+            <div className="mt-2 space-y-2"><TokenField id="miro-token" token={token} setToken={setToken} /><MiroTokenHelp /></div>
+          </details>
+        ) : (
+          <><TokenField id="miro-token" token={token} setToken={setToken} required /><MiroTokenHelp /></>
+        ))}
         {error && <p className="text-sm text-rose-600">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={busy}>{busy ? <><Loader2 size={16} className="animate-spin" /> Importing…</> : "Import"}</button>
+          <button className="btn-primary" disabled={busy || !ready}>{busy ? <><Loader2 size={16} className="animate-spin" /> Importing…</> : "Import"}</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+
+function TokenField({ id, token, setToken, required }: { id: string; token: string; setToken: (t: string) => void; required?: boolean }) {
+  return (
+    <div>
+      <label className="label" htmlFor={id}>Miro access token</label>
+      <input id={id} className="input font-mono" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} required={required} />
+      <p className="mt-1 text-xs text-slate-500">Used for this import only. It isn&apos;t saved.</p>
     </div>
   );
 }
@@ -108,46 +216,64 @@ export function setMiroToken(token: string | null, remember = false) {
   } catch { /* private window */ }
 }
 
-/** Asks for a Miro token (and the board link, when Miro's clipboard didn't say) to bring over copied files. */
+/**
+ * Shown when pasting files copied in Miro needs a Miro connection (or the board link, when Miro's
+ * clipboard didn't say). "Connect Miro" signs in once; a token pasted by hand still works as a fallback.
+ * onSubmit gets a null token to use the connected account.
+ */
 export function MiroPasteDialog({ count, needBoard, error, onSubmit, onClose }: {
   count: number; needBoard: boolean; error?: string | null;
-  onSubmit: (token: string, remember: boolean, link: string) => void; onClose: () => void;
+  onSubmit: (token: string | null, remember: boolean, link: string) => void; onClose: () => void;
 }) {
+  const miro = useMiroConnections();
   const [token, setToken] = useState("");
   const [link, setLink] = useState("");
   const [remember, setRemember] = useState(true);
+  const oauth = miro.available === true;
+  const submit = () => onSubmit(token.trim() || null, remember, link.trim());
+  const ready = (!needBoard || link.trim().length > 0) && (token.trim().length > 0 || (oauth && miro.connections.length > 0));
+  const tokenField = (required: boolean) => (
+    <div>
+      <label className="label" htmlFor="miro-paste-token">Miro access token</label>
+      <input id="miro-paste-token" className="input font-mono" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} required={required} />
+      <label className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+        <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+        Remember in this browser so the next paste just works
+      </label>
+      <p className="mt-1 text-xs text-slate-500">The token stays in your browser. Schema&apos;s server uses it only to fetch the files and never saves it.</p>
+    </div>
+  );
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
       <form className="card max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}
-        onSubmit={(e) => { e.preventDefault(); onSubmit(token.trim(), remember, link.trim()); }}>
+        onSubmit={(e) => { e.preventDefault(); if (ready) submit(); }}>
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Paste {count === 1 ? "a file" : `${count} files`} from Miro</h2>
           <button type="button" className="btn-ghost p-1" onClick={onClose}><X size={18} /></button>
         </div>
         <p className="text-sm text-slate-600">
           Miro copies pictures, PDFs, videos and other files as a reference to the board, not the file itself.
-          Schema can download them through Miro with your access token.
+          {oauth ? " Connect your Miro account so Schema can download them." : " Schema can download them through Miro with your access token."}
         </p>
         {needBoard && (
           <div>
             <label className="label" htmlFor="miro-paste-link">Link to the Miro board you copied from</label>
-            <input id="miro-paste-link" className="input" value={link} onChange={(e) => setLink(e.target.value)} required placeholder="https://miro.com/app/board/…" />
+            <input id="miro-paste-link" className="input" value={link} onChange={(e) => setLink(e.target.value)} required placeholder="https://miro.com/app/board/…" autoFocus />
           </div>
         )}
-        <div>
-          <label className="label" htmlFor="miro-paste-token">Miro access token</label>
-          <input id="miro-paste-token" className="input font-mono" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} required autoFocus />
-          <label className="mt-2 flex items-center gap-2 text-sm text-slate-600">
-            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-            Remember in this browser so the next paste just works
-          </label>
-          <p className="mt-1 text-xs text-slate-500">The token stays in your browser. Schema&apos;s server uses it only to fetch the files and never saves it.</p>
-        </div>
-        <MiroTokenHelp />
         {error && <p className="text-sm text-rose-600">{error}</p>}
+        {oauth && <MiroAccount miro={miro} onConnected={() => { if (!needBoard || link.trim()) submit(); }} />}
+        {miro.available !== null && (oauth ? (
+          <details className="text-sm text-slate-600">
+            <summary className="cursor-pointer text-slate-500">Use an access token instead</summary>
+            <div className="mt-2 space-y-2">{tokenField(false)}<MiroTokenHelp /></div>
+          </details>
+        ) : (
+          <>{tokenField(true)}<MiroTokenHelp /></>
+        ))}
         <div className="flex justify-end gap-2">
           <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary">Paste</button>
+          <button className="btn-primary" disabled={!ready}>Paste</button>
         </div>
       </form>
     </div>

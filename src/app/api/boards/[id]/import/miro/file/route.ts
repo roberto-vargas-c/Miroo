@@ -3,22 +3,19 @@ import { boardAndAccess } from "@/lib/boardAccess";
 import { DB_MAX_BYTES } from "@/lib/media";
 import { readLimited } from "@/lib/safeFetch";
 import type { MiroItem } from "@/lib/board/miro";
-
-// MIRO_API_URL only exists so tests can point this at a local stand-in.
-const API = process.env.MIRO_API_URL ?? "https://api.miro.com/v2";
+import { MIRO_API as API, MiroError, miroBoardAccess } from "@/lib/miroAuth";
 
 const Body = z.object({
   board: z.string().min(3).max(200),
   item: z.string().min(1).max(40),
   name: z.string().max(300).optional(),
-  token: z.string().min(10).max(500),
+  token: z.string().min(10).max(500).optional(),
 });
-
-class MiroError extends Error { constructor(msg: string, public status = 502) { super(msg); } }
 
 /**
  * Downloads the file behind one item copied in Miro (a picture, PDF, video or other document) through
- * Miro's REST API, with the person's own token (used for this request only, never stored or logged).
+ * Miro's REST API, with the person's connected Miro account, or a token pasted by hand (used for this
+ * request only, never stored or logged).
  * Miro's clipboard holds only a reference to the file, not its bytes. Answers with the file itself, or
  * `{ link }` for items that point at a web page.
  */
@@ -27,9 +24,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const r = await boardAndAccess(id, new URL(req.url).searchParams.get("share"));
   if (!r?.access.canEdit || !r.user) return Response.json({ error: "Not allowed" }, { status: 403 });
   const parsed = Body.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return Response.json({ error: "Missing Miro board, item or token" }, { status: 400 });
+  if (!parsed.success) return Response.json({ error: "Missing Miro board or item" }, { status: 400 });
   const { board, item, name, token } = parsed.data;
-  const auth = { authorization: `Bearer ${token.trim()}`, accept: "application/json" };
+  let auth: Record<string, string> = {};
   const b = encodeURIComponent(board);
 
   const miro = async <T,>(path: string, allow404 = false): Promise<T | null> => {
@@ -44,6 +41,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   };
 
   try {
+    auth = { authorization: `Bearer ${(await miroBoardAccess(r.user.id, board, token)).token}`, accept: "application/json" };
     let it = await miro<MiroItem>(`/boards/${b}/items/${encodeURIComponent(item)}`, true);
     // Fall back to finding the item by its title, in case the copied id isn't the API's id.
     if (!it && name) {
@@ -83,7 +81,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const title = (typeof d.title === "string" && d.title.trim()) || name || `${it.type}-${item}`;
     return new Response(bytes, { headers: { "content-type": type, "x-file-name": encodeURIComponent(title.slice(0, 200)), "cache-control": "no-store" } });
   } catch (e) {
-    if (e instanceof MiroError) return Response.json({ error: e.message }, { status: e.status });
+    if (e instanceof MiroError) return Response.json({ error: e.message, needsConnect: e.needsConnect || undefined }, { status: e.status });
     if (e instanceof Error && e.message === "too big") return Response.json({ error: "That file is over 25 MB" }, { status: 413 });
     return Response.json({ error: "Couldn't reach Miro. Try again" }, { status: 502 });
   }
