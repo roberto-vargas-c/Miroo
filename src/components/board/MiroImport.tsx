@@ -53,7 +53,7 @@ export function useMiroConnections() {
 }
 
 /** "Connect Miro" button, or the connected teams with a way to add another or disconnect. */
-function MiroAccount({ miro, onConnected }: { miro: ReturnType<typeof useMiroConnections>; onConnected?: () => void }) {
+export function MiroAccount({ miro, onConnected }: { miro: ReturnType<typeof useMiroConnections>; onConnected?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const go = async () => {

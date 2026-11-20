@@ -6,6 +6,7 @@ import { loadWorkspace } from "@/lib/workspace";
 import { toggleStar, toggleFolderStar, deleteBoard, createFolder, renameFolder, deleteFolder, moveBoardToFolder } from "@/app/actions/workspace";
 import { AutoSubmitSelect } from "@/components/AutoSubmitSelect";
 import { NewBoardButton } from "@/components/NewBoardButton";
+import { MigrateFromMiro } from "@/components/MigrateFromMiro";
 import { ConfirmButton } from "@/components/ConfirmButton";
 
 export default async function BoardsPage({
@@ -72,16 +73,19 @@ export default async function BoardsPage({
           <p className="text-sm text-slate-500">Boards you can open in this workspace</p>
         </div>
         {atLeast(role, "MEMBER") && (
-          <NewBoardButton
-            workspaceId={wid}
-            teams={teams.map((t) => ({ id: t.id, name: t.name }))}
-            folders={folders.map((f) => ({ id: f.id, name: f.name }))}
-            folderId={currentFolder?.id ?? ""}
-            customTemplates={templates.map((t) => ({
-              id: t.id, name: t.name, description: t.description, by: templateAuthors.get(t.createdById) ?? "someone",
-              canDelete: isAdmin || t.createdById === user.id,
-            }))}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <MigrateFromMiro workspaceId={wid} folderId={currentFolder?.id ?? ""} />
+            <NewBoardButton
+              workspaceId={wid}
+              teams={teams.map((t) => ({ id: t.id, name: t.name }))}
+              folders={folders.map((f) => ({ id: f.id, name: f.name }))}
+              folderId={currentFolder?.id ?? ""}
+              customTemplates={templates.map((t) => ({
+                id: t.id, name: t.name, description: t.description, by: templateAuthors.get(t.createdById) ?? "someone",
+                canDelete: isAdmin || t.createdById === user.id,
+              }))}
+            />
+          </div>
         )}
       </div>
 

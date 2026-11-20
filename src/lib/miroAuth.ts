@@ -184,3 +184,48 @@ export async function miroBoardAccess(userId: string, boardId: string, manualTok
     403, true,
   );
 }
+
+export type MiroBoardSummary = { id: string; name: string; teamId: string; teamName: string | null; modifiedAt?: string; owner?: string };
+
+/** Every board the person can see in each connected Miro team, newest changes first. */
+export async function listMiroBoards(userId: string): Promise<{ boards: MiroBoardSummary[]; failedTeams: string[] }> {
+  const conns = await db.miroConnection.findMany({ where: { userId }, orderBy: { updatedAt: "desc" } });
+  if (!conns.length) throw new MiroError(miroOAuth() ? "Connect Miro first" : "Connect Miro isn't set up on this server", 401, true);
+  const seen = new Set<string>();
+  const boards: MiroBoardSummary[] = [];
+  const failedTeams: string[] = [];
+  type Page = { data?: { id: string; name?: string; modifiedAt?: string; team?: { id?: string | number; name?: string }; owner?: { name?: string } }[]; total?: number };
+  for (const c of conns) {
+    let token = await accessToken(c);
+    const get = (t: string, offset: number) =>
+      fetch(`${MIRO_API}/boards?limit=50&offset=${offset}&sort=last_modified`, { headers: { authorization: `Bearer ${t}`, accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+    try {
+      for (let offset = 0; offset < 2000; ) {
+        let res = token ? await get(token, offset) : null;
+        if (!res || res.status === 401) {
+          token = await refresh(c);
+          res = token ? await get(token, offset) : null;
+        }
+        if (res?.status === 429) throw new MiroError("Miro is rate-limiting requests. Try again in a minute", 429);
+        if (!res?.ok) throw new Error(String(res?.status ?? "no token"));
+        const page = (await res.json()) as Page;
+        const data = page.data ?? [];
+        for (const b of data) {
+          if (seen.has(b.id)) continue;
+          seen.add(b.id);
+          boards.push({
+            id: b.id, name: b.name || "Untitled board", modifiedAt: b.modifiedAt, owner: b.owner?.name,
+            teamId: b.team?.id != null ? String(b.team.id) : c.teamId, teamName: b.team?.name ?? c.teamName,
+          });
+        }
+        offset += data.length;
+        if (!data.length || (page.total != null && offset >= page.total)) break;
+      }
+    } catch (e) {
+      if (e instanceof MiroError) throw e;
+      failedTeams.push(c.teamName ?? "a Miro team");
+    }
+  }
+  boards.sort((a, b) => (b.modifiedAt ?? "").localeCompare(a.modifiedAt ?? ""));
+  return { boards, failedTeams };
+}
