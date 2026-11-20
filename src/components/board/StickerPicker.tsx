@@ -37,19 +37,19 @@ export function StickerPicker({ gifs, onPick, onUploadGif, onClose }: {
   const jump = (id: string) => scroller.current?.querySelector(`[data-section="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   const item = (p: StickerPick, key?: string) => {
+    const k = key ?? `${p.kind}:${p.id}`;
     const common = {
-      key: key ?? `${p.kind}:${p.id}`,
       draggable: true,
       onDragStart: (e: React.DragEvent) => { e.dataTransfer.setData(STICKER_DRAG_TYPE, JSON.stringify(p)); e.dataTransfer.effectAllowed = "copy"; },
       onClick: () => pick(p),
     };
     if (p.kind === "emoji") {
-      return <button {...common} title="Add emoji" className="flex h-10 w-10 items-center justify-center rounded-lg text-[26px] leading-none hover:bg-slate-100">{p.id}</button>;
+      return <button key={k} {...common} title="Add emoji" className="flex h-10 w-10 items-center justify-center rounded-lg text-[26px] leading-none hover:bg-slate-100">{p.id}</button>;
     }
     const src = p.kind === "sticker" ? stickerUrl(p.id) ?? "" : p.id;
     const label = p.kind === "sticker" ? STICKER_BY_ID.get(p.id)?.label : "GIF";
     return (
-      <button {...common} title={label} className="flex aspect-square items-center justify-center rounded-xl p-1 transition hover:scale-105 hover:bg-slate-100">
+      <button key={k} {...common} title={label} className="flex aspect-square items-center justify-center rounded-xl p-1 transition hover:scale-105 hover:bg-slate-100">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={src} alt={label ?? ""} className="max-h-full max-w-full object-contain" draggable={false} />
       </button>

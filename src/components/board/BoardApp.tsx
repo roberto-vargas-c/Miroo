@@ -668,6 +668,8 @@ export function BoardApp(p: BoardAppProps) {
   }, [placeTemplate, stickerTemplate]);
   // Something picked from a menu follows the pointer as a ghost until a click puts it down (Esc cancels).
   const [placing, setPlacing] = useState<BoardElement | null>(null);
+  const [coarsePointer, setCoarsePointer] = useState(false);
+  useEffect(() => { setCoarsePointer(window.matchMedia?.("(pointer: coarse)").matches ?? false); }, []);
   const onPlace = (at: { x: number; y: number }) => {
     if (!placing) return;
     const el = placeTemplate(placing, at);
@@ -1140,6 +1142,14 @@ export function BoardApp(p: BoardAppProps) {
         archOpen={archOpen} onArch={canEdit ? () => { setArchOpen((o) => !o); setStickersOpen(false); } : undefined} />
       {canEdit && stickersOpen && (
         <StickerPicker gifs={boardGifs} onPick={async (pk) => { setPlacing(await stickerTemplate(pk)); setTool("select"); if (isPhone) setStickersOpen(false); }} onUploadGif={() => gifInputRef.current?.click()} onClose={() => setStickersOpen(false)} />
+      )}
+      {placing && (
+        <div className="pointer-events-none absolute left-1/2 top-[calc(max(0.75rem,env(safe-area-inset-top))+3.5rem)] z-20 -translate-x-1/2">
+          <div className="pointer-events-auto flex items-center gap-2 whitespace-nowrap rounded-full border border-slate-200 bg-white py-1 pl-3 pr-1 text-sm text-slate-700 shadow-lg">
+            <span>{coarsePointer ? "Drag on the board to position, lift to place" : "Click to place · Esc to cancel"}</span>
+            <button className="btn-ghost rounded-full p-1" title="Cancel" onClick={() => setPlacing(null)}><X size={14} /></button>
+          </div>
+        </div>
       )}
       <input ref={gifInputRef} type="file" multiple accept="image/gif" hidden
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = ""; }} />
