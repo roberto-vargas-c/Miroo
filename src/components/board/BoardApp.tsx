@@ -23,8 +23,8 @@ import { PenPalette } from "./PenPalette";
 import { getQuality, setQuality, reduceImage, pdfSideFor, type Quality } from "./imageQuality";
 import { CropDialog, applyCrop } from "./CropDialog";
 const DocPanel = dynamic(() => import("./DocPanel").then((m) => m.DocPanel), { ssr: false });
-import { pastedNotes } from "@/lib/board/miro";
-import { MiroDialog } from "./MiroImport";
+import { decodeMiroClipboard, htmlImageSources, miroBoardId, pastedNotes, type MiroClip } from "@/lib/board/miro";
+import { MiroDialog, MiroPasteDialog, getMiroToken, setMiroToken } from "./MiroImport";
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
 import { ShareDialog, type Sharing } from "./ShareDialog";
@@ -438,51 +438,39 @@ export function BoardApp(p: BoardAppProps) {
       }
     } catch { /* keep the bare link */ }
   }, [api, setSelection]);
-  useEffect(() => {
-    if (!canEdit) return;
-    const onPaste = (e: ClipboardEvent) => {
-      const a = document.activeElement;
-      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
-      if (e.defaultPrevented || e.clipboardData?.files.length) return;
-      const text = e.clipboardData?.getData("text/plain") ?? "";
-      if (looksLikeUrl(text)) { e.preventDefault(); addEmbed(text); return; }
-      // Text from Miro or anywhere else: one sticky note per item, laid out in a grid.
-      const notes = pastedNotes(text, e.clipboardData?.getData("text/html") ?? "");
-      if (!notes.length) return;
-      e.preventDefault();
-      const c = canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
-      const cols = Math.ceil(Math.sqrt(notes.length)), size = 200, gap = 24;
-      const rows = Math.ceil(notes.length / cols);
-      const z = Date.now();
-      const els = notes.map((t, i) => makeElement("sticky", c.x - (cols * (size + gap)) / 2 + (i % cols) * (size + gap), c.y - (rows * (size + gap)) / 2 + Math.floor(i / cols) * (size + gap), {
-        width: size, height: size, text: t, z: z + i, fontSize: t.length > 120 ? 13 : t.length > 60 ? 15 : 18,
-      }));
-      api.add(els);
-      setSelection(els.map((x) => x.id));
-      if (els.length > 1) setToast(`Pasted ${els.length} sticky notes`);
-    };
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, [canEdit, addEmbed, api, setSelection]);
 
   // ── Images ──
   const q = p.shareToken ? `?share=${encodeURIComponent(p.shareToken)}` : "";
   /** Adds dropped, pasted or picked files: images (GIFs play), PDFs (one image per page) and videos. */
   const addFiles = useCallback(async (list: File[], at?: { x: number; y: number }) => {
-    const files = list.filter((f) => kindOf(f) !== null);
+    const files = list.filter((f) => f.size <= FILE_MAX_BYTES);
     const skipped = list.length - files.length;
-    if (!files.length) { if (skipped) setError("Drop images, PDFs or videos (MP4, WebM, MOV)"); return; }
+    if (!files.length) { if (skipped) setError(`Files must be under ${FILE_MAX_BYTES / 1024 / 1024} MB`); return; }
     const origin = at ?? canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
     const created: BoardElement[] = [];
     const failed: string[] = [];
     // Each file's element, sized but not yet placed; laid out in rows once all are known.
     const items: BoardElement[][] = [];
     try {
-      for (const [i, f] of files.entries()) {
+      for (let [i, f] of files.entries()) {
         const tag = files.length > 1 ? ` ${i + 1}/${files.length}` : "";
         try {
-          const kind = kindOf(f)!;
-          if (kind === "pdf") {
+          let kind = kindOf(f);
+          // Pictures the board can't show directly (SVG, BMP, AVIF…) become PNGs when the browser can read them.
+          if (kind === "file" && /^image\//.test(f.type || "")) {
+            const png = await toPng(f);
+            if (png) { f = png; kind = "image"; }
+          }
+          if (kind === "file") {
+            setImporting(`Uploading ${f.name || "file"}${tag}…`);
+            const name = f.name || "file";
+            const url = await uploadBlob(f, name);
+            const el = makeElement("embed", 0, 0, { width: 320, height: 96 }) as EmbedElement;
+            el.url = `${url}?name=${encodeURIComponent(name)}`;
+            el.title = name;
+            el.site = `${fileLabel(name, f.type)} · ${formatBytes(f.size)}`;
+            items.push([el]);
+          } else if (kind === "pdf") {
             setImporting(`Reading PDF${tag}…`);
             const { renderPdf } = await import("./pdfImport");
             const pages = await renderPdf(f, (d, t) => setImporting(`Rendering page ${d}/${t}${tag}…`), pdfSideFor(getQuality()));
@@ -559,7 +547,7 @@ export function BoardApp(p: BoardAppProps) {
         }
       }
       if (failed.length) setError(`Couldn't add ${failed.join("; ")}`);
-      else if (skipped) setToast(`${skipped} file${skipped > 1 ? "s were" : " was"} skipped (only images, PDFs and videos can be added)`);
+      else if (skipped) setToast(`${skipped} file${skipped > 1 ? "s were" : " was"} skipped (files must be under ${FILE_MAX_BYTES / 1024 / 1024} MB)`);
     } finally {
       setImporting(null);
     }
@@ -615,18 +603,115 @@ export function BoardApp(p: BoardAppProps) {
   };
   const addImageFile = useCallback((f: File, at?: { x: number; y: number }) => addFiles([f], at), [addFiles]);
 
+  // ── Paste ──
+  // Files first (screenshots, files copied in the file manager, pictures copied in a browser), then files
+  // copied in Miro (its clipboard only names them, so they're fetched through Miro's API), then pictures in
+  // copied HTML, then a link, then text as sticky notes.
+  const [miroPaste, setMiroPaste] = useState<{ clip: MiroClip; at?: { x: number; y: number }; error?: string } | null>(null);
+  const fetchMiroFiles = useCallback(async (clip: MiroClip, token: string, at?: { x: number; y: number }) => {
+    const files: File[] = [];
+    const failed: string[] = [];
+    let denied: string | null = null;
+    for (const [i, it] of clip.files.entries()) {
+      setImporting(`Getting ${it.name || "file"} from Miro${clip.files.length > 1 ? ` ${i + 1}/${clip.files.length}` : ""}…`);
+      try {
+        const res = await fetch(`/api/boards/${p.boardId}/import/miro/file${q}`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ board: clip.boardId, item: it.itemId, name: it.name, token }),
+        });
+        if (res.status === 401 || res.status === 403) { denied = (await res.json().catch(() => ({}))).error ?? "Miro didn't accept the token"; break; }
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `failed (${res.status})`);
+        if ((res.headers.get("content-type") ?? "").startsWith("application/json")) {
+          const j = await res.json();
+          if (j.link) addEmbed(j.link);
+          continue;
+        }
+        const blob = await res.blob();
+        files.push(new File([blob], withExtension(decodeURIComponent(res.headers.get("x-file-name") ?? it.name ?? "file"), blob.type), { type: blob.type }));
+      } catch (e) {
+        failed.push(`${it.name || it.kind}: ${e instanceof Error ? e.message : "failed"}`);
+      }
+    }
+    setImporting(null);
+    if (denied) { setMiroToken(null); setMiroPaste({ clip, at, error: denied }); return; }
+    if (files.length) await addFiles(files, at);
+    if (failed.length) setError(`Couldn't paste from Miro: ${failed.join("; ")}`);
+  }, [addFiles, addEmbed, p.boardId, q]);
+  const pasteFromMiro = useCallback((clip: MiroClip, at?: { x: number; y: number }) => {
+    const token = getMiroToken();
+    if (token && clip.boardId) fetchMiroFiles(clip, token, at);
+    else setMiroPaste({ clip, at });
+  }, [fetchMiroFiles]);
+
+  /** Adds sticky notes in a grid at the view's center; returns a point to the right of them. */
+  const addNotes = useCallback((notes: string[]) => {
+    const c = canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 };
+    const cols = Math.ceil(Math.sqrt(notes.length)), size = 200, gap = 24;
+    const rows = Math.ceil(notes.length / cols);
+    const z = Date.now();
+    const els = notes.map((t, i) => makeElement("sticky", c.x - (cols * (size + gap)) / 2 + (i % cols) * (size + gap), c.y - (rows * (size + gap)) / 2 + Math.floor(i / cols) * (size + gap), {
+      width: size, height: size, text: t, z: z + i, fontSize: t.length > 120 ? 13 : t.length > 60 ? 15 : 18,
+    }));
+    api.add(els);
+    setSelection(els.map((x) => x.id));
+    if (els.length > 1) setToast(`Pasted ${els.length} sticky notes`);
+    return { x: c.x + (cols * (size + gap)) / 2 + 300, y: c.y };
+  }, [api, setSelection]);
+
+  /** Downloads pictures named in pasted HTML (data: links are read in the browser). */
+  const pasteImageLinks = useCallback(async (srcs: string[], at?: { x: number; y: number }) => {
+    const files: File[] = [];
+    for (const [i, src] of srcs.entries()) {
+      setImporting(`Getting picture${srcs.length > 1 ? ` ${i + 1}/${srcs.length}` : ""}…`);
+      try {
+        const res = src.startsWith("data:") ? await fetch(src) : await fetch(`/api/boards/${p.boardId}/fetch${q ? `${q}&` : "?"}url=${encodeURIComponent(src)}`);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/")) continue;
+        const name = decodeURIComponent(res.headers.get("x-file-name") ?? "") || "pasted";
+        files.push(new File([blob], withExtension(name, blob.type), { type: blob.type }));
+      } catch { /* skip that one */ }
+    }
+    setImporting(null);
+    if (files.length) await addFiles(files, at);
+    else setError("Couldn't download the pasted picture. Try saving it and dropping the file on the board");
+  }, [addFiles, p.boardId, q]);
+
   useEffect(() => {
     if (!canEdit) return;
     const onPaste = (e: ClipboardEvent) => {
       const a = document.activeElement;
       if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a as HTMLElement | null)?.isContentEditable) return;
-      if (e.defaultPrevented) return;
-      const files = Array.from(e.clipboardData?.files ?? []);
-      if (files.length) { e.preventDefault(); addFiles(files); }
+      const dt = e.clipboardData;
+      if (e.defaultPrevented || !dt) return;
+      let files = Array.from(dt.files ?? []);
+      if (!files.length) files = Array.from(dt.items ?? []).filter((it) => it.kind === "file").map((it) => it.getAsFile()).filter((f): f is File => !!f);
+      if (files.length) { e.preventDefault(); addFiles(files); return; }
+      const html = dt.getData("text/html") ?? "";
+      const text = dt.getData("text/plain") ?? "";
+      const clip = decodeMiroClipboard(html);
+      if (clip?.files.length) {
+        e.preventDefault();
+        // Notes and text copied along with the files still come over as sticky notes.
+        let at: { x: number; y: number } | undefined;
+        if (clip.widgetTypes.some((t) => ["sticker", "text", "shape", "card"].includes(t))) {
+          const notes = pastedNotes(text, html);
+          if (notes.length) at = addNotes(notes);
+        }
+        pasteFromMiro(clip, at);
+        return;
+      }
+      if (looksLikeUrl(text)) { e.preventDefault(); addEmbed(text); return; }
+      const imgs = clip ? [] : htmlImageSources(html);
+      const notes = pastedNotes(text, html);
+      if (!imgs.length && !notes.length) return;
+      e.preventDefault();
+      const at = notes.length ? addNotes(notes) : undefined;
+      if (imgs.length) pasteImageLinks(imgs, at);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [canEdit, addFiles]);
+  }, [canEdit, addFiles, addEmbed, addNotes, pasteFromMiro, pasteImageLinks]);
 
   const duplicateSelected = () => {
     const src = selected.filter((s) => s.type !== "connector");
@@ -952,7 +1037,7 @@ export function BoardApp(p: BoardAppProps) {
       )}
       <input ref={gifInputRef} type="file" multiple accept="image/gif" hidden
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = ""; }} />
-      <input ref={fileRef} type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.pdf,video/mp4,video/webm,video/quicktime,.mov,.mp4,.webm" hidden
+      <input ref={fileRef} type="file" multiple hidden
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = ""; }} />
 
       {canEdit && (
@@ -1064,6 +1149,17 @@ export function BoardApp(p: BoardAppProps) {
             setTimeout(() => canvasRef.current?.fitContent(), 250);
           }} />
       )}
+      {miroPaste && canEdit && (
+        <MiroPasteDialog count={miroPaste.clip.files.length} needBoard={!miroPaste.clip.boardId} error={miroPaste.error}
+          onClose={() => setMiroPaste(null)}
+          onSubmit={(token, remember, link) => {
+            const board = miroPaste.clip.boardId ?? miroBoardId(link);
+            if (!board) { setMiroPaste({ ...miroPaste, error: "That doesn't look like a Miro board link" }); return; }
+            setMiroToken(token, remember);
+            setMiroPaste(null);
+            fetchMiroFiles({ ...miroPaste.clip, boardId: board }, token, miroPaste.at);
+          }} />
+      )}
       {dialog === "template" && (
         <TemplateDialog boardId={p.boardId} title={title} elements={liveElements} onClose={() => setDialog(null)}
           onDone={(msg) => { setDialog(null); setToast(msg); }} />
@@ -1154,12 +1250,48 @@ const EXT_TYPES: Record<string, string> = {
 function mediaTypeFromName(name: string) {
   return EXT_TYPES[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
 }
-function kindOf(f: File): "image" | "pdf" | "video" | null {
+/** Largest file the board stores (no object storage on this deployment). */
+const FILE_MAX_BYTES = 25 * 1024 * 1024;
+/** How a file goes on the board: a picture, PDF pages, a video player, or a file card to download. */
+function kindOf(f: File): "image" | "pdf" | "video" | "file" {
   const t = f.type || mediaTypeFromName(f.name);
   if (t === "application/pdf") return "pdf";
   if (["image/png", "image/jpeg", "image/gif", "image/webp"].includes(t)) return "image";
   if (["video/mp4", "video/webm", "video/quicktime", "video/ogg"].includes(t)) return "video";
-  return null;
+  return "file";
+}
+/** A picture in a format the board doesn't keep, redrawn as PNG; null when the browser can't read it. */
+async function toPng(f: File): Promise<File | null> {
+  const url = URL.createObjectURL(f);
+  try {
+    const img = new window.Image();
+    await new Promise((r, j) => { img.onload = r; img.onerror = j; img.src = url; });
+    const w = img.naturalWidth || 800, h = img.naturalHeight || 600;
+    const k = Math.min(1, 4000 / Math.max(w, h));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(w * k)); canvas.height = Math.max(1, Math.round(h * k));
+    canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/png"));
+    return blob ? new File([blob], (f.name || "picture").replace(/\.[^.]+$/, "") + ".png", { type: "image/png" }) : null;
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+const TYPE_EXT: Record<string, string> = Object.fromEntries(Object.entries(EXT_TYPES).map(([e, t]) => [t, e]));
+Object.assign(TYPE_EXT, { "image/jpeg": "jpg", "video/mp4": "mp4", "image/svg+xml": "svg" });
+/** Adds an extension from the file type when the name has none (Miro titles often don't). */
+function withExtension(name: string, type: string) {
+  const ext = TYPE_EXT[type];
+  return !ext || /\.[a-z0-9]{1,5}$/i.test(name) ? name : `${name}.${ext}`;
+}
+function fileLabel(name: string, type: string) {
+  const ext = name.match(/\.([a-z0-9]{1,5})$/i)?.[1];
+  return ext ? ext.toUpperCase() : type ? type.split("/").pop()!.toUpperCase().slice(0, 12) : "File";
+}
+function formatBytes(n: number) {
+  return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 /** Natural size of an uploaded video (16:9 if the browser can't read it). */
 function videoSize(url: string): Promise<{ w: number; h: number }> {
