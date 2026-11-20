@@ -36,8 +36,8 @@ A collaborative online whiteboard for architecture teams, with workspaces and te
 - Export the board or the selection as PNG (standard or high resolution) or PDF
 - Export frames as PDF pages, one per frame, sized 1 board unit = 1 pt, so plans imported from a PDF print at their original paper size and scale
 - Paste text from Miro or any other app: each copied sticky note, line or paragraph becomes its own sticky note
-- Paste pictures, PDFs, videos and other files copied in Miro: Miro's clipboard only names them, so Schema downloads them through Miro's API with your access token (asked once, kept in your browser if you choose). Pictures in HTML copied from web pages and docs come over too
-- Import a whole Miro board (board menu → Import from Miro): sticky notes, shapes, text, frames, cards, images, links and connectors keep their positions and colors. It uses Miro's REST API with your own access token (create an app in Miro with `boards:read` and install it to get one); the token is used for that import only and isn't stored
+- Paste pictures, PDFs, videos and other files copied in Miro: Miro's clipboard only names them, so Schema downloads them through Miro's API after you click **Connect Miro** once (or with an access token you paste). Pictures in HTML copied from web pages and docs come over too
+- Import a whole Miro board (board menu → Import from Miro): sticky notes, shapes, text, frames, cards, images, links and connectors keep their positions and colors. It uses Miro's REST API with your connected Miro account, or an access token pasted by hand (used for that import only, not stored)
 - Import a CSV (or TSV) as sticky notes, task cards (reads title, status, assignee and due date columns) or a table
 - Version history: an automatic snapshot every 10 minutes of editing, named versions, preview any version, restore it (the current board is saved first, and the restore can be undone)
 
@@ -150,6 +150,7 @@ Schema runs on Cloudflare Workers: the Next.js app through [OpenNext](https://op
    | `CLOUDFLARE_ACCOUNT_ID` | secret, optional | only if the token can reach more than one account |
    | `RESEND_API_KEY` | secret, optional | not needed on Cloudflare: email goes through Cloudflare Email Sending (see below) |
    | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | secrets, optional | "Continue with Google" (redirect URI `<APP_URL>/api/auth/oidc/callback`) |
+   | `MIRO_CLIENT_ID`, `MIRO_CLIENT_SECRET` | secrets, optional | "Connect Miro" for pasting from and importing Miro boards. Create an app in Miro (profile → Settings → Your apps), tick `boards:read`, and add the redirect URI `<APP_URL>/api/miro/callback`. Without these, people paste a Miro access token by hand |
 
 6. Run **Actions → Deploy to Cloudflare → Run workflow**. A custom domain can be added afterwards under the Worker's Settings → Domains & Routes; set `APP_URL` to match.
 

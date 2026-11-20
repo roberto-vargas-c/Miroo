@@ -681,7 +681,7 @@ export function BoardApp(p: BoardAppProps) {
   // copied in Miro (its clipboard only names them, so they're fetched through Miro's API), then pictures in
   // copied HTML, then a link, then text as sticky notes.
   const [miroPaste, setMiroPaste] = useState<{ clip: MiroClip; at?: { x: number; y: number }; error?: string } | null>(null);
-  const fetchMiroFiles = useCallback(async (clip: MiroClip, token: string, at?: { x: number; y: number }) => {
+  const fetchMiroFiles = useCallback(async (clip: MiroClip, token: string | null, at?: { x: number; y: number }) => {
     const files: File[] = [];
     const failed: string[] = [];
     let denied: string | null = null;
@@ -690,9 +690,14 @@ export function BoardApp(p: BoardAppProps) {
       try {
         const res = await fetch(`/api/boards/${p.boardId}/import/miro/file${q}`, {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ board: clip.boardId, item: it.itemId, name: it.name, token }),
+          body: JSON.stringify({ board: clip.boardId, item: it.itemId, name: it.name, token: token ?? undefined }),
         });
-        if (res.status === 401 || res.status === 403) { denied = (await res.json().catch(() => ({}))).error ?? "Miro didn't accept the token"; break; }
+        if (res.status === 401 || res.status === 403) {
+          const j = await res.json().catch(() => ({}));
+          // Not connected yet: the dialog explains, no need for an error line.
+          denied = res.status === 401 && !token && j.needsConnect ? "" : j.error ?? "Miro didn't allow this. Connect Miro again";
+          break;
+        }
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `failed (${res.status})`);
         if ((res.headers.get("content-type") ?? "").startsWith("application/json")) {
           const j = await res.json();
@@ -706,13 +711,14 @@ export function BoardApp(p: BoardAppProps) {
       }
     }
     setImporting(null);
-    if (denied) { setMiroToken(null); setMiroPaste({ clip, at, error: denied }); return; }
+    if (denied !== null) { if (token) setMiroToken(null); setMiroPaste({ clip, at, error: denied || undefined }); return; }
     if (files.length) await addFiles(files, at);
     if (failed.length) setError(`Couldn't paste from Miro: ${failed.join("; ")}`);
   }, [addFiles, addEmbed, p.boardId, q]);
   const pasteFromMiro = useCallback((clip: MiroClip, at?: { x: number; y: number }) => {
-    const token = getMiroToken();
-    if (token && clip.boardId) fetchMiroFiles(clip, token, at);
+    // With a connected Miro account (or a remembered token) this just works; otherwise the server says so
+    // and the dialog offers "Connect Miro".
+    if (clip.boardId) fetchMiroFiles(clip, getMiroToken(), at);
     else setMiroPaste({ clip, at });
   }, [fetchMiroFiles]);
 
@@ -1268,7 +1274,7 @@ export function BoardApp(p: BoardAppProps) {
           onSubmit={(token, remember, link) => {
             const board = miroPaste.clip.boardId ?? miroBoardId(link);
             if (!board) { setMiroPaste({ ...miroPaste, error: "That doesn't look like a Miro board link" }); return; }
-            setMiroToken(token, remember);
+            if (token) setMiroToken(token, remember);
             setMiroPaste(null);
             fetchMiroFiles({ ...miroPaste.clip, boardId: board }, token, miroPaste.at);
           }} />

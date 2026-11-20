@@ -6,29 +6,26 @@ import { boardAndAccess } from "@/lib/boardAccess";
 import { DB_MAX_BYTES, BUCKET_MAX_BYTES, IMAGE_TYPES, mediaBucket } from "@/lib/media";
 import { mapMiroBoard, miroBoardId, type MiroConnector, type MiroItem } from "@/lib/board/miro";
 import type { ImageElement } from "@/lib/board/types";
-
-// MIRO_API_URL only exists so tests can point the import at a local stand-in.
-const API = process.env.MIRO_API_URL ?? "https://api.miro.com/v2";
+import { MIRO_API as API, MiroError, miroBoardAccess } from "@/lib/miroAuth";
 const MAX_ITEMS = 3000;
 const MAX_IMAGES = 80;
 
-const Body = z.object({ link: z.string().min(3).max(500), token: z.string().min(10).max(500) });
-
-class MiroError extends Error { constructor(msg: string, public status = 502) { super(msg); } }
+const Body = z.object({ link: z.string().min(3).max(500), token: z.string().min(10).max(500).optional() });
 
 /**
- * Imports a Miro board through Miro's REST API. The access token is used for this request only:
- * it isn't stored or logged. Returns elements laid out from (0, 0); the client places them.
+ * Imports a Miro board through Miro's REST API, with the person's connected Miro account ("Connect Miro"),
+ * or an access token pasted by hand (used for this request only, never stored or logged).
+ * Returns elements laid out from (0, 0); the client places them.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const r = await boardAndAccess(id, new URL(req.url).searchParams.get("share"));
   if (!r?.access.canEdit || !r.user) return NextResponse.json({ error: "Not allowed" }, { status: 403 });
   const parsed = Body.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "Add the Miro board link and an access token" }, { status: 400 });
+  if (!parsed.success) return NextResponse.json({ error: "Add the Miro board link" }, { status: 400 });
   const boardId = miroBoardId(parsed.data.link);
   if (!boardId) return NextResponse.json({ error: "That doesn't look like a Miro board link" }, { status: 400 });
-  const auth = { authorization: `Bearer ${parsed.data.token.trim()}`, accept: "application/json" };
+  let auth: Record<string, string> = {};
 
   const miro = async <T,>(path: string): Promise<T> => {
     const res = await fetch(`${API}${path}`, { headers: auth });
@@ -52,7 +49,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   try {
     const b = encodeURIComponent(boardId);
-    const board = await miro<{ name?: string }>(`/boards/${b}`);
+    const { token, board } = await miroBoardAccess(r.user.id, boardId, parsed.data.token);
+    auth = { authorization: `Bearer ${token}`, accept: "application/json" };
     const [items, connectors] = await Promise.all([all<MiroItem>(`/boards/${b}/items`), all<MiroConnector>(`/boards/${b}/connectors`)]);
     const result = mapMiroBoard(items, connectors);
 
@@ -97,7 +95,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const elements = result.elements.filter((e) => !drop.has(e.id));
     return NextResponse.json({ name: board.name ?? "Miro board", elements, skipped: result.skipped, imageFailures, truncated: items.length >= MAX_ITEMS });
   } catch (e) {
-    if (e instanceof MiroError) return NextResponse.json({ error: e.message }, { status: e.status });
+    if (e instanceof MiroError) return NextResponse.json({ error: e.message, needsConnect: e.needsConnect || undefined }, { status: e.status });
     return NextResponse.json({ error: "Couldn't reach Miro. Try again" }, { status: 502 });
   }
 }
