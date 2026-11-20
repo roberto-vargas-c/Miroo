@@ -10,7 +10,8 @@ import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/
 import { unionRect, bounds as elBounds } from "./geometry";
 import { ArchToolbar } from "./ArchToolbar";
 import { ScaleDialog } from "./ScaleDialog";
-import { renameBoard, toggleStar } from "@/app/actions/workspace";
+import { createBoard, deleteBoard, duplicateBoard, moveBoardToFolder, renameBoard, toggleStar } from "@/app/actions/workspace";
+import { useBoardPrefs } from "./boardPrefs";
 import { SidebarDrawer, SidebarToggleButton, useSidebarShortcut } from "@/components/AppSidebar";
 import type { SidebarData } from "@/lib/sidebar";
 import { LogoMark } from "@/components/Logo";
@@ -33,7 +34,7 @@ import { PropertiesBar } from "./PropertiesBar";
 import { groupRemapper } from "./arrange";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
-import { BoardMenu, CsvDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
+import { BoardMenu, CsvDialog, DetailsDialog, ShortcutsDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
 import { AiPanel, textItems, type AiResults } from "./AiPanel";
 import { layoutClusters, summaryElement, ideaStickies, flowchartElements, mindmapElements } from "./aiLayout";
 
@@ -58,6 +59,10 @@ export type BoardAppProps = {
   sidebar?: SidebarData | null;
   /** Whether the viewer starred this board; null when they can't star it. */
   starred?: boolean | null;
+  /** Workspace folders, for "Move to". */
+  folders?: { id: string; name: string }[];
+  /** Shown in Board › Details (workspace members only). */
+  details?: { folderId: string | null; createdBy: string | null; createdAt: string; updatedAt: string } | null;
 };
 
 export function BoardApp(p: BoardAppProps) {
@@ -87,16 +92,18 @@ export function BoardApp(p: BoardAppProps) {
   const [showResolved, setShowResolved] = useState(false);
   const [penColor, setPenColor] = useState("#111827");
   const [penWidth, setPenWidth] = useState(3);
-  const [showAuthors, setShowAuthors] = useState(false);
-  useEffect(() => { try { setShowAuthors(localStorage.getItem("schema.showAuthors") === "1"); } catch { /* ignore */ } }, []);
-  const [wheelMode, setWheelMode] = useState<WheelMode>("auto");
-  useEffect(() => { try { const m = localStorage.getItem("schema.wheelMode"); if (m === "zoom" || m === "pan" || m === "auto") setWheelMode(m); } catch { /* ignore */ } }, []);
+  // Per-person view settings from the board menu, kept in this browser.
+  const [prefs, setPref] = useBoardPrefs();
+  const { showAuthors, wheelMode } = prefs;
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
   const cycleWheelMode = () => {
     const next: WheelMode = wheelMode === "auto" ? "zoom" : wheelMode === "zoom" ? "pan" : "auto";
-    setWheelMode(next);
-    try { localStorage.setItem("schema.wheelMode", next); } catch { /* ignore */ }
+    setPref("wheelMode", next);
     setToast(`Scroll wheel: ${WHEEL_LABEL[next]}`);
   };
+  const [folderId, setFolderId] = useState(p.details?.folderId ?? null);
+  const [infoDialog, setInfoDialog] = useState<"shortcuts" | "details" | null>(null);
   const [highlightWidth, setHighlightWidth] = useState(18);
   const [connectorStyle, setConnectorStyle] = useState<ConnectorStyle>("curved");
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +135,7 @@ export function BoardApp(p: BoardAppProps) {
   const anim = useRef<number | null>(null);
   const flyTo = useCallback((target: Camera, ms = 450) => {
     if (anim.current) cancelAnimationFrame(anim.current);
+    if (prefsRef.current.reduceMotion) { anim.current = null; setCamera(target); return; }
     const from = cameraRef.current;
     const t0 = performance.now();
     const step = (t: number) => {
@@ -301,6 +309,56 @@ export function BoardApp(p: BoardAppProps) {
   }, [presenter?.clientId, presenting]); // eslint-disable-line react-hooks/exhaustive-deps
   const [presentMenu, setPresentMenu] = useState(false);
 
+  // ── Board menu › Board ──
+  const member = !!p.user && !!p.workspaceId;
+  const manage = member && p.canManage;
+  const fail = (what: string) => (e: unknown) => {
+    // A server action that redirects rejects with Next's redirect signal: let it through.
+    if (e && typeof e === "object" && "digest" in e && String((e as { digest: unknown }).digest).startsWith("NEXT_REDIRECT")) throw e;
+    setError(`Couldn't ${what}. Try again.`);
+  };
+  const boardActions = {
+    onNew: member ? () => {
+      const fd = new FormData();
+      fd.set("template", "blank");
+      if (folderId) fd.set("folderId", folderId);
+      setImporting("Creating a board…");
+      createBoard(p.workspaceId!, fd).catch(fail("create a board")).finally(() => setImporting(null));
+    } : undefined,
+    onDuplicate: member ? () => {
+      setImporting("Duplicating the board…");
+      // The live board is saved a moment after each change, so give the last edits time to land.
+      setTimeout(() => duplicateBoard(p.boardId).catch(fail("duplicate the board")).finally(() => setImporting(null)), 1800);
+    } : undefined,
+    folders: p.folders,
+    folderId,
+    onMove: manage && p.folders?.length ? (id: string | null) => {
+      const fd = new FormData();
+      fd.set("folderId", id ?? "");
+      moveBoardToFolder(p.boardId, fd)
+        .then(() => { setFolderId(id); setToast(id ? `Moved to ${p.folders?.find((f) => f.id === id)?.name}.` : "Moved out of its folder."); })
+        .catch(fail("move the board"));
+    } : undefined,
+    starred,
+    onToggleStar: member && p.starred != null ? () => {
+      setStarred((v) => !v);
+      toggleStar(p.boardId).catch((e) => { setStarred((v) => !v); fail("star the board")(e); });
+    } : undefined,
+    onDelete: manage ? () => {
+      if (!window.confirm(`Delete “${title}” for everyone? This can't be undone.`)) return;
+      deleteBoard(p.boardId).then(() => { window.location.href = `/w/${p.workspaceId}`; }).catch(fail("delete the board"));
+    } : undefined,
+    background: session.background,
+    onBackground: canEdit ? (c: string | null) => api.setSession("background", c) : undefined,
+    hasStartView: !!session.startView,
+    onStartView: canEdit ? (set: boolean) => {
+      api.setSession("startView", set ? myViewport() : null);
+      setToast(set ? "The board now opens on this view for everyone." : "The board now opens on the whole board.");
+    } : undefined,
+    onHistory: canEditBoard ? () => { setHistoryOpen(true); setAiOpen(false); setCommentsOpen(false); setVoteOpen(false); } : undefined,
+    onDetails: p.details ? () => setInfoDialog("details") : undefined,
+  };
+
   // Fit the board to the screen once the first sync arrives.
   const fitted = useRef(false);
   useEffect(() => {
@@ -309,7 +367,8 @@ export function BoardApp(p: BoardAppProps) {
     const tryFit = () => {
       if (!canvasRef.current) return void setTimeout(tryFit, 50);
       fitted.current = true;
-      canvasRef.current.fitContent();
+      if (session.startView) setCamera(cameraForViewport(session.startView));
+      else canvasRef.current.fitContent();
     };
     tryFit();
   }, [synced]);
@@ -840,6 +899,11 @@ export function BoardApp(p: BoardAppProps) {
         onOpenDoc={(id) => setOpenDoc(id)}
         placing={placing}
         showAuthors={showAuthors}
+        grid={prefs.grid}
+        background={session.background}
+        showCursors={prefs.showCursors}
+        showConnectors={prefs.showConnectors}
+        showDimensions={prefs.showDimensions}
         onPlace={onPlace}
         onCancelPlace={() => setPlacing(null)}
         onCopyDoc={(from, to) => ydoc.transact(() => copyXml(ydoc.getXmlFragment(docFragment(from)), ydoc.getXmlFragment(docFragment(to))))}
@@ -851,9 +915,9 @@ export function BoardApp(p: BoardAppProps) {
         onCalibrate={(l) => setScaleDialog({ lengthPx: Math.hypot(l.x2 - l.x1, l.y2 - l.y1), plan: planAt({ x: (l.x1 + l.x2) / 2, y: (l.y1 + l.y2) / 2 }) })}
         onComment={(pt) => { setCommentDraft(pt); setCommentsOpen(true); setActiveComment(null); }}
         overlay={<>
-          {!presenting && <CommentPins comments={comments.comments} camera={camera} activeId={activeComment} draft={commentDraft} showResolved={showResolved}
+          {!presenting && prefs.showComments && <CommentPins comments={comments.comments} camera={camera} activeId={activeComment} draft={commentDraft} showResolved={showResolved}
             onOpen={(id) => { setActiveComment(id); setCommentsOpen(true); }} />}
-          {floating.map((r) => (
+          {!prefs.reduceMotion && floating.map((r) => (
             <div key={r.key} className="reaction-float pointer-events-none absolute z-[6] text-4xl"
               style={{ left: r.x * camera.scale + camera.x - 20, top: r.y * camera.scale + camera.y - 20 }}>{r.emoji}</div>
           ))}
@@ -974,10 +1038,12 @@ export function BoardApp(p: BoardAppProps) {
               <History size={18} />
             </button>
           )}
-          <div data-keep-open className="contents"><BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onImportMiro={p.user ? () => setDialog("miro") : undefined} onSaveTemplate={() => setDialog("template")}
-            canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0}
-            dark={dark} onToggleDark={() => setDarkMode(!dark)}
-            showAuthors={showAuthors} onToggleAuthors={() => setShowAuthors((v) => { try { localStorage.setItem("schema.showAuthors", v ? "0" : "1"); } catch { /* ignore */ } return !v; })} /></div>
+          <div data-keep-open className="contents"><BoardMenu prefs={prefs} setPref={setPref} board={boardActions}
+            onExport={exportBoard} onImportCsv={() => setDialog("csv")} onImportMiro={p.user ? () => setDialog("miro") : undefined} onSaveTemplate={() => setDialog("template")}
+            onShortcuts={() => setInfoDialog("shortcuts")} dark={dark} onToggleDark={() => setDarkMode(!dark)}
+            onUndo={api.undo} onRedo={api.redo} onSelectAll={() => setSelection(elements.map((e) => e.id))}
+            onDuplicate={duplicateSelected} onDelete={() => { api.remove(selection); setSelection([]); }}
+            canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0} /></div>
           </div>
           {p.sharing && <button className="btn-primary px-2.5 py-1.5 sm:px-4" title="Share" onClick={() => setShareOpen(true)}><Share2 size={16} /> <span className="hidden sm:inline">Share</span></button>}
         </div>
@@ -1043,7 +1109,7 @@ export function BoardApp(p: BoardAppProps) {
           title={`Scroll wheel: ${WHEEL_LABEL[wheelMode]}. Click to change. Pinch always zooms.`}>
           {wheelMode === "pan" ? <Move size={16} /> : wheelMode === "zoom" ? <ZoomIn size={16} /> : <Mouse size={16} />}
         </button>
-        {canEdit && (
+        {canEdit && prefs.showUndoRedo && (
           <>
             <div className="mx-0.5 h-5 w-px bg-slate-200" />
             <button className="btn-ghost p-1.5" title="Undo (Ctrl+Z)" onClick={api.undo}><Undo2 size={16} /></button>
@@ -1087,6 +1153,11 @@ export function BoardApp(p: BoardAppProps) {
           onPreview={(v) => { setSelection([]); setPreview(v); if (v) requestAnimationFrame(() => canvasRef.current?.fitContent()); }}
           onRestored={(msg) => setToast(msg)}
           onClose={() => { setHistoryOpen(false); setPreview(null); }} />
+      )}
+      {infoDialog === "shortcuts" && <ShortcutsDialog onClose={() => setInfoDialog(null)} />}
+      {infoDialog === "details" && p.details && (
+        <DetailsDialog title={title} details={p.details} folder={p.folders?.find((f) => f.id === folderId)?.name ?? null}
+          items={elements.length} frames={frames.length} sharing={p.sharing} teams={p.teams} onClose={() => setInfoDialog(null)} />
       )}
       {dialog === "csv" && canEdit && (
         <CsvDialog at={canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 }} members={p.members} onClose={() => setDialog(null)}

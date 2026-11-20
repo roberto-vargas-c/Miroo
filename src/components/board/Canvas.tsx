@@ -29,6 +29,7 @@ import {
   type BoardScale, type Unit,
 } from "@/lib/board/arch";
 import type { BoardApi, Peer } from "./useBoard";
+import type { GridStyle } from "./boardPrefs";
 import {
   bounds,
   clampScale,
@@ -118,6 +119,12 @@ type Props = {
   hiddenIds?: Set<string>;
   /** Hide all chrome-like affordances (selection, transformer) e.g. while presenting. */
   presenting?: boolean;
+  /** View settings from the board menu. */
+  grid?: GridStyle;
+  background?: string | null;
+  showCursors?: boolean;
+  showConnectors?: boolean;
+  showDimensions?: boolean;
 };
 
 const SHAPE_TOOLS: Partial<Record<Tool, ElementType>> = { rect: "rect", ellipse: "ellipse", diamond: "diamond", frame: "frame", shape: "shape" };
@@ -996,6 +1003,18 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   let gridSize = 24 * s;
   while (gridSize < 14) gridSize *= 2;
   const dotR = Math.max(0.45, Math.min(1.3, 1.1 * Math.sqrt(s)));
+  const gridColor = dark ? "#334155" : "#cbd5e1";
+  const gridImage = props.grid === "none" || s <= 0.06 ? undefined
+    : props.grid === "lines" ? `linear-gradient(to right, ${gridColor}80 1px, transparent 1px), linear-gradient(to bottom, ${gridColor}80 1px, transparent 1px)`
+    : `radial-gradient(circle, ${gridColor} ${dotR}px, transparent ${dotR + 0.5}px)`;
+  // Width × height of a single selected item, shown under it.
+  const sized = props.showDimensions && selection.length === 1 && !gesture ? byId.get(selection[0]) : undefined;
+  const sizedBox = sized && sized.type !== "connector" && sized.type !== "pen" ? bounds(sized) : null;
+  // In real units when the item sits on a scaled plan (or the board has a scale), otherwise in board pixels.
+  const sizeLabel = (b: { x: number; y: number; width: number; height: number }) => {
+    const k = metersPerPxAt(elements, { x: b.x + b.width / 2, y: b.y + b.height / 2 }, boardScale);
+    return k ? `${formatLength(b.width * k, unit)} × ${formatLength(b.height * k, unit)}` : `${Math.round(b.width)} × ${Math.round(b.height)}`;
+  };
   const peerSel = peers.flatMap((p) => (p.selection ?? []).map((id) => ({ id, color: p.color })));
 
   return (
@@ -1005,8 +1024,9 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       style={{
         cursor,
         touchAction: "none",
-        backgroundColor: dark ? "#12171e" : "#f8fafc",
-        backgroundImage: s > 0.06 ? `radial-gradient(circle, ${dark ? "#334155" : "#cbd5e1"} ${dotR}px, transparent ${dotR + 0.5}px)` : undefined,
+        // Dark mode keeps its own canvas color; the board's background color applies in light mode.
+        backgroundColor: dark ? "#12171e" : props.background ?? "#f8fafc",
+        backgroundImage: gridImage,
         backgroundSize: `${gridSize}px ${gridSize}px`,
         backgroundPosition: `${camera.x}px ${camera.y}px`,
       }}
@@ -1038,6 +1058,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
           {elements.map((raw) => {
             const el = dark ? forDark(raw) : raw;
             if (el.type === "connector") {
+              if (props.showConnectors === false) return null;
               const c = el as ConnectorElement;
               const { points: pts, bezier } = connectorPath(c, byId);
               const sel = selection.includes(c.id);
@@ -1186,8 +1207,14 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
         />
       )}
 
+      {sizedBox && (
+        <div className="pointer-events-none absolute left-0 top-0 z-[5] whitespace-nowrap rounded bg-slate-800/85 px-1.5 py-0.5 text-[11px] tabular-nums text-white"
+          style={{ transform: `translate(${(sizedBox.x + sizedBox.width / 2) * s + camera.x}px, ${(sizedBox.y + sizedBox.height) * s + camera.y + 10}px) translateX(-50%)` }}>
+          {sizeLabel(sizedBox)}
+        </div>
+      )}
       {/* Remote cursors */}
-      {peers.map((p) =>
+      {props.showCursors !== false && peers.map((p) =>
         p.cursor ? (
           <div key={p.clientId} className="pointer-events-none absolute left-0 top-0 transition-transform duration-75"
             style={{ transform: `translate(${p.cursor.x * s + camera.x}px, ${p.cursor.y * s + camera.y}px)` }}>

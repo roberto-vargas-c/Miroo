@@ -26,6 +26,10 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
   // Starring needs workspace access to the board, not only a share link.
   const canStar = !!user && !!access.role && (await boardAccessForUser(user.id, board)).canView;
   const starred = canStar && !!(await db.boardStar.findUnique({ where: { userId_boardId: { userId: user!.id, boardId: board.id } } }));
+  const [folders, creator] = await Promise.all([
+    isMember ? db.folder.findMany({ where: { workspaceId: board.workspaceId }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [],
+    isMember ? db.user.findUnique({ where: { id: board.createdById }, select: { name: true } }) : null,
+  ]);
   return (
     <BoardApp
       boardId={board.id}
@@ -42,6 +46,11 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
       ai={aiEnabled()}
       sidebar={sidebar}
       starred={canStar ? starred : null}
+      folders={folders}
+      details={isMember ? {
+        folderId: board.folderId, createdBy: creator?.name ?? null,
+        createdAt: board.createdAt.toISOString(), updatedAt: board.updatedAt.toISOString(),
+      } : null}
     />
   );
 }

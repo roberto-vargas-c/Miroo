@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Ellipsis, FileDown, FileImage, FileSpreadsheet, History, LayoutTemplate, RotateCcw, X, Eye, UserRound, Import, Moon, Sun } from "lucide-react";
+import {
+  Accessibility, BoxSelect, Check, ChevronLeft, ChevronRight, Copy, Ellipsis, Expand, Eye, FileDown, FileImage, FileSpreadsheet, Grid3x3, History,
+  Import, Keyboard, LayoutDashboard, LayoutTemplate, MessageSquare, MousePointer2, PenLine, Redo2, RotateCcw, Ruler, Shrink, SlidersHorizontal,
+  Spline, Trash2, Undo2, UserRound, Wind, X, Plus, CopyPlus, Upload, FolderInput, Star, PaintBucket, ScanEye, Maximize, Info, Moon,
+} from "lucide-react";
+import type { BoardPrefs, GridStyle } from "./boardPrefs";
+import type { WheelMode } from "./Canvas";
+import type { Sharing } from "./ShareDialog";
 import type { BoardElement } from "@/lib/board/types";
 import { parseCsv, csvToElements, CSV_LIMITS, type CsvMode } from "@/lib/board/csv";
 import { saveBoardAsTemplate } from "@/app/actions/workspace";
@@ -9,54 +16,295 @@ import type { BoardApi } from "./useBoard";
 
 export type ExportKind = "png" | "png-hi" | "pdf" | "pdf-frames";
 
-// ── "More" menu: export, import, templates ──────────────────────────────────
+// ── Board menu: board, edit, view, preferences and accessibility settings ───
+
+type Sub = "board" | "edit" | "view" | "prefs" | "a11y";
+
+const SUBS: { id: Sub; label: string; icon: React.ReactNode }[] = [
+  { id: "board", label: "Board", icon: <LayoutDashboard size={16} /> },
+  { id: "edit", label: "Edit", icon: <PenLine size={16} /> },
+  { id: "view", label: "View", icon: <Eye size={16} /> },
+  { id: "prefs", label: "Preferences", icon: <SlidersHorizontal size={16} /> },
+  { id: "a11y", label: "Accessibility", icon: <Accessibility size={16} /> },
+];
+
+const GRID_LABEL: Record<GridStyle, string> = { dots: "Dots", lines: "Lines", none: "No grid" };
+const WHEEL_CHOICES: { id: WheelMode; label: string; hint: string }[] = [
+  { id: "auto", label: "Automatic", hint: "Mouse wheel zooms, trackpad scrolls" },
+  { id: "zoom", label: "Always zoom", hint: "The wheel and trackpad both zoom" },
+  { id: "pan", label: "Always scroll", hint: "Hold Ctrl or ⌘ to zoom" },
+];
+
+function useFullscreen() {
+  const [on, setOn] = useState(false);
+  const [supported, setSupported] = useState(false);
+  useEffect(() => {
+    setSupported(!!document.fullscreenEnabled);
+    const upd = () => setOn(!!document.fullscreenElement);
+    upd();
+    document.addEventListener("fullscreenchange", upd);
+    return () => document.removeEventListener("fullscreenchange", upd);
+  }, []);
+  const toggle = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.documentElement.requestFullscreen().catch(() => { /* refused */ });
+  };
+  return { on, supported, toggle };
+}
+
+/** Board-level actions; each is left out when the viewer can't use it. */
+export type BoardActions = {
+  onNew?: () => void;
+  onDuplicate?: () => void;
+  folders?: { id: string; name: string }[];
+  folderId?: string | null;
+  onMove?: (folderId: string | null) => void;
+  starred?: boolean;
+  onToggleStar?: () => void;
+  onDelete?: () => void;
+  background: string | null;
+  onBackground?: (color: string | null) => void;
+  hasStartView: boolean;
+  onStartView?: (set: boolean) => void;
+  onHistory?: () => void;
+  onDetails?: () => void;
+};
+
+export const BACKGROUNDS: { color: string | null; name: string }[] = [
+  { color: null, name: "Default" },
+  { color: "#ffffff", name: "White" },
+  { color: "#f7f3ea", name: "Paper" },
+  { color: "#fbf6dc", name: "Trace" },
+  { color: "#e9f0fa", name: "Blueprint" },
+  { color: "#e8f4f0", name: "Mint" },
+  { color: "#eeece9", name: "Stone" },
+];
 
 export function BoardMenu({
-  onExport, onImportCsv, onImportMiro, onSaveTemplate, canEdit, canTemplate, frameCount, hasSelection, showAuthors, onToggleAuthors, dark, onToggleDark,
+  prefs, setPref, board, onExport, onImportCsv, onImportMiro, onSaveTemplate, onShortcuts,
+  onUndo, onRedo, onSelectAll, onDuplicate, onDelete,
+  canEdit, canTemplate, frameCount, hasSelection, dark, onToggleDark,
 }: {
+  prefs: BoardPrefs; setPref: <K extends keyof BoardPrefs>(k: K, v: BoardPrefs[K]) => void;
+  board: BoardActions;
   onExport: (k: ExportKind) => void; onImportCsv: () => void; onImportMiro?: () => void; onSaveTemplate: () => void;
+  onShortcuts: () => void;
+  onUndo: () => void; onRedo: () => void; onSelectAll: () => void; onDuplicate: () => void; onDelete: () => void;
   canEdit: boolean; canTemplate: boolean; frameCount: number; hasSelection: boolean;
-  showAuthors?: boolean; onToggleAuthors?: () => void; dark?: boolean; onToggleDark?: () => void;
+  dark?: boolean; onToggleDark?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [sub, setSub] = useState<Sub | null>(null);
+  const [subTop, setSubTop] = useState(0);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const fs = useFullscreen();
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setSub(null); setExpanded(null); return; }
     const close = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (sub) setSub(null); else setOpen(false);
+    };
     window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [open]);
-  const item = (label: string, icon: React.ReactNode, onClick: () => void, disabled = false, hint?: string) => (
-    <button className="btn-ghost w-full justify-start gap-2 text-left" disabled={disabled} title={hint}
+    window.addEventListener("keydown", esc, true);
+    return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", esc, true); };
+  }, [open, sub]);
+
+  const openSub = (id: Sub, row: HTMLElement) => { setSub(id); setSubTop(row.offsetTop); setExpanded(null); };
+
+  const action = (label: string, icon: React.ReactNode, onClick: () => void, opts: { disabled?: boolean; hint?: string; keys?: string } = {}) => (
+    <button key={label} role="menuitem" className="btn-ghost w-full justify-start gap-2 text-left" disabled={opts.disabled} title={opts.hint}
       onClick={() => { setOpen(false); onClick(); }}>
       {icon}<span className="flex-1">{label}</span>
+      {opts.keys && <kbd className="font-sans text-xs text-slate-400">{opts.keys}</kbd>}
     </button>
   );
+  const toggle = (label: string, icon: React.ReactNode, on: boolean, onChange: (v: boolean) => void, hint?: string) => (
+    <button key={label} role="menuitemcheckbox" aria-checked={on} className="btn-ghost w-full justify-start gap-2 text-left" title={hint}
+      onClick={() => onChange(!on)}>
+      {icon}<span className="flex-1">{label}</span>
+      <span className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${on ? "bg-brand-600" : "bg-slate-300"}`}>
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-[left] ${on ? "left-[18px]" : "left-0.5"}`} />
+      </span>
+    </button>
+  );
+  const choice = (label: string, selected: boolean, onClick: () => void, hint?: string) => (
+    <button key={label} role="menuitemradio" aria-checked={selected} className="btn-ghost w-full justify-start gap-2 text-left" onClick={onClick}>
+      <Check size={16} className={selected ? "text-brand-600" : "invisible"} />
+      <span className="flex-1">{label}{hint && <span className="block text-xs text-slate-500">{hint}</span>}</span>
+    </button>
+  );
+  const heading = (t: string) => <div className="px-3 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-slate-400">{t}</div>;
+  const divider = <div className="my-1 h-px bg-slate-100" />;
+  const expander = (id: string, label: string, icon: React.ReactNode, value: string | null, children: React.ReactNode) => (
+    <div key={id}>
+      <button role="menuitem" aria-expanded={expanded === id} className={`btn-ghost w-full justify-start gap-2 text-left ${expanded === id ? "bg-slate-100" : ""}`}
+        onClick={() => setExpanded((x) => (x === id ? null : id))}>
+        {icon}<span className="flex-1">{label}</span>
+        {value && <span className="max-w-[7rem] truncate text-xs text-slate-500">{value}</span>}
+        <ChevronRight size={14} className={`text-slate-400 transition-transform ${expanded === id ? "rotate-90" : ""}`} />
+      </button>
+      {expanded === id && <div className="mb-1 ml-4 border-l border-slate-100 pl-1">{children}</div>}
+    </div>
+  );
+  const folderName = board.folderId ? board.folders?.find((f) => f.id === board.folderId)?.name ?? "Folder" : "No folder";
+  const bgName = BACKGROUNDS.find((b) => b.color === board.background)?.name ?? "Custom";
+  const mod = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
+
+  const body: Record<Sub, React.ReactNode> = {
+    board: <>
+      {board.onNew && action("New board", <Plus size={16} />, board.onNew, { hint: "A blank board in the same folder" })}
+      {board.onDuplicate && action("Duplicate board", <CopyPlus size={16} />, board.onDuplicate, { hint: "Make a copy of this board and open it" })}
+      {expander("export", `Export ${hasSelection ? "selection" : "board"}`, <Upload size={16} />, null, <>
+        {action("Image (PNG)", <FileImage size={16} />, () => onExport("png"))}
+        {action("High-resolution image (PNG)", <FileImage size={16} />, () => onExport("png-hi"))}
+        {action("PDF", <FileDown size={16} />, () => onExport("pdf"))}
+        {action(`PDF, one page per frame (${frameCount})`, <FileDown size={16} />, () => onExport("pdf-frames"), {
+          disabled: frameCount === 0, hint: frameCount === 0 ? "Add frames to the board first" : "Each frame becomes a page, at its size on the board" })}
+      </>)}
+      {(board.onMove || board.onToggleStar || board.onDelete) && divider}
+      {board.onMove && expander("move", "Move to", <FolderInput size={16} />, folderName, <>
+        {choice("No folder", !board.folderId, () => { setOpen(false); board.onMove!(null); })}
+        {board.folders?.map((f) => choice(f.name, board.folderId === f.id, () => { setOpen(false); board.onMove!(f.id); }))}
+      </>)}
+      {board.onToggleStar && action(board.starred ? "Unstar this board" : "Star this board",
+        <Star size={16} className={board.starred ? "fill-amber-400 text-amber-500" : ""} />, board.onToggleStar)}
+      {board.onDelete && action("Delete board", <Trash2 size={16} />, board.onDelete)}
+      {divider}
+      {board.onBackground && expander("bg", "Background color", <PaintBucket size={16} />, bgName, (
+        <div className="grid grid-cols-4 gap-1.5 p-2">
+          {BACKGROUNDS.map((b) => (
+            <button key={b.name} title={b.name} aria-label={b.name} aria-pressed={board.background === b.color}
+              className={`flex h-12 flex-col items-center justify-end rounded-lg border pb-1 text-[10px] text-slate-600 ${board.background === b.color ? "border-brand-500 ring-2 ring-brand-100" : "border-slate-200 hover:border-slate-300"}`}
+              style={{ background: b.color ?? "#f8fafc" }} onClick={() => board.onBackground!(b.color)}>
+              {b.name}
+            </button>
+          ))}
+        </div>
+      ))}
+      {board.onStartView && expander("start", "Start view", <ScanEye size={16} />, board.hasStartView ? "Set" : "Whole board", <>
+        {action("Use the current view", <ScanEye size={16} />, () => board.onStartView!(true), { hint: "Everyone opens the board here" })}
+        {action("Open on the whole board", <Maximize size={16} />, () => board.onStartView!(false), { disabled: !board.hasStartView })}
+      </>)}
+      {board.onHistory && action("Version history", <History size={16} />, board.onHistory)}
+      {board.onDetails && action("Details", <Info size={16} />, board.onDetails)}
+      {(canEdit || canTemplate) && divider}
+      {canEdit && action("Import CSV…", <FileSpreadsheet size={16} />, onImportCsv)}
+      {canEdit && onImportMiro && action("Import from Miro…", <Import size={16} />, onImportMiro)}
+      {canTemplate && action("Save board as template…", <LayoutTemplate size={16} />, onSaveTemplate)}
+    </>,
+    edit: <>
+      {action("Undo", <Undo2 size={16} />, onUndo, { disabled: !canEdit, keys: `${mod}Z` })}
+      {action("Redo", <Redo2 size={16} />, onRedo, { disabled: !canEdit, keys: mod === "⌘" ? "⇧⌘Z" : "Ctrl+Y" })}
+      {divider}
+      {action("Select all", <BoxSelect size={16} />, onSelectAll, { keys: `${mod}A` })}
+      {action("Duplicate", <Copy size={16} />, onDuplicate, { disabled: !canEdit || !hasSelection, keys: `${mod}D` })}
+      {action("Delete", <Trash2 size={16} />, onDelete, { disabled: !canEdit || !hasSelection, keys: "Del" })}
+    </>,
+    view: <>
+      {expander("grid", "Grid", <Grid3x3 size={16} />, GRID_LABEL[prefs.grid],
+        (Object.keys(GRID_LABEL) as GridStyle[]).map((g) => choice(GRID_LABEL[g], prefs.grid === g, () => setPref("grid", g))))}
+      {toggle("Collaborators' cursors", <MousePointer2 size={16} />, prefs.showCursors, (v) => setPref("showCursors", v))}
+      {toggle("Comments on board", <MessageSquare size={16} />, prefs.showComments, (v) => setPref("showComments", v), "Show comment pins on the canvas")}
+      {toggle("Object dimensions", <Ruler size={16} />, prefs.showDimensions, (v) => setPref("showDimensions", v), "Show the width and height of the selected item")}
+      {toggle("Undo and redo buttons", <Undo2 size={16} />, prefs.showUndoRedo, (v) => setPref("showUndoRedo", v), "Show undo and redo next to the zoom controls")}
+      {toggle("Connectors", <Spline size={16} />, prefs.showConnectors, (v) => setPref("showConnectors", v), "Hide connector lines to see the board without them")}
+      {toggle("Authors on sticky notes", <UserRound size={16} />, prefs.showAuthors, (v) => setPref("showAuthors", v))}
+      {fs.supported && <>
+        {divider}
+        {action(fs.on ? "Exit full screen" : "Enter full screen", fs.on ? <Shrink size={16} /> : <Expand size={16} />, fs.toggle)}
+      </>}
+    </>,
+    prefs: <>
+      {onToggleDark && toggle("Dark mode", <Moon size={16} />, !!dark, () => onToggleDark())}
+      {onToggleDark && divider}
+      {heading("Scroll wheel")}
+      {WHEEL_CHOICES.map((w) => choice(w.label, prefs.wheelMode === w.id, () => setPref("wheelMode", w.id), w.hint))}
+      <p className="px-3 pb-1 pt-1 text-xs text-slate-500">Pinch always zooms.</p>
+    </>,
+    a11y: <>
+      {toggle("Reduce motion", <Wind size={16} />, prefs.reduceMotion, (v) => setPref("reduceMotion", v), "Jump instead of gliding when the view moves, and skip floating reactions")}
+      {action("Keyboard shortcuts", <Keyboard size={16} />, onShortcuts)}
+    </>,
+  };
+
+  const subLabel = SUBS.find((x) => x.id === sub)?.label;
   return (
     <div className="relative" ref={ref}>
-      <button className={`btn-ghost p-1.5 ${open ? "bg-slate-100" : ""}`} title="Export, import and templates" onClick={() => setOpen((o) => !o)}>
+      <button className={`btn-ghost p-1.5 ${open ? "bg-slate-100" : ""}`} title="Board menu" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <Ellipsis size={18} />
       </button>
       {open && (
-        <div className="card fixed left-3 right-3 top-40 z-40 sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:z-30 sm:w-72 p-1">
-          <div className="px-3 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-slate-400">
-            Export {hasSelection ? "selection" : "board"}
+        <div className="fixed left-3 right-3 top-40 z-40 sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:z-30 sm:flex sm:flex-row-reverse sm:items-start sm:gap-1.5">
+          <div role="menu" aria-label="Board menu" className={`card p-1 sm:w-56 ${sub ? "max-sm:hidden" : ""}`}>
+            {SUBS.map((x) => (
+              <button key={x.id} role="menuitem" aria-haspopup="menu" aria-expanded={sub === x.id}
+                className={`btn-ghost w-full justify-start gap-2 text-left ${sub === x.id ? "bg-slate-100" : ""}`}
+                onClick={(e) => (sub === x.id ? setSub(null) : openSub(x.id, e.currentTarget))}
+                onPointerEnter={(e) => { if (e.pointerType === "mouse") openSub(x.id, e.currentTarget); }}>
+                {x.icon}<span className="flex-1">{x.label}</span><ChevronRight size={14} className="text-slate-400" />
+              </button>
+            ))}
           </div>
-          {item("Image (PNG)", <FileImage size={16} />, () => onExport("png"))}
-          {item("High-resolution image (PNG)", <FileImage size={16} />, () => onExport("png-hi"))}
-          {item("PDF", <FileDown size={16} />, () => onExport("pdf"))}
-          {item(`PDF, one page per frame (${frameCount})`, <FileDown size={16} />, () => onExport("pdf-frames"), frameCount === 0,
-            frameCount === 0 ? "Add frames to the board first" : "Each frame becomes a page, at its size on the board")}
-          <div className="my-1 h-px bg-slate-100" />
-          <div className="px-3 pb-1 pt-1 text-xs font-medium uppercase tracking-wide text-slate-400">View</div>
-          {onToggleDark && item(dark ? "Light mode" : "Dark mode", dark ? <Sun size={16} /> : <Moon size={16} />, onToggleDark)}
-          {onToggleAuthors && item(showAuthors ? "Hide authors on sticky notes" : "Show authors on sticky notes", <UserRound size={16} />, onToggleAuthors)}
-          {(canEdit || canTemplate) && <div className="my-1 h-px bg-slate-100" />}
-          {canEdit && item("Import CSV…", <FileSpreadsheet size={16} />, onImportCsv)}
-          {canEdit && onImportMiro && item("Import from Miro…", <Import size={16} />, onImportMiro)}
-          {canTemplate && item("Save board as template…", <LayoutTemplate size={16} />, onSaveTemplate)}
+          {sub && (
+            <div role="menu" aria-label={subLabel} className="card max-h-[calc(100dvh-11rem)] overflow-y-auto p-1 sm:mt-[var(--sub-top)] sm:w-72"
+              style={{ ["--sub-top" as string]: `${subTop}px` }}>
+              <button className="btn-ghost w-full justify-start gap-2 text-left font-medium sm:hidden" onClick={() => setSub(null)}>
+                <ChevronLeft size={16} /> {subLabel}
+              </button>
+              <div className="sm:hidden">{divider}</div>
+              {body[sub]}
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Calls `onClose` on Escape. Registered once: re-registering on every render would drop the key
+ * when another Escape handler re-renders the board while the event is still being dispatched.
+ */
+function useEscape(onClose: () => void) {
+  const ref = useRef(onClose);
+  ref.current = onClose;
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") ref.current(); };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, []);
+}
+
+export const SHORTCUTS: [string, string][] = [
+  ["V", "Select"], ["H", "Hand (pan)"], ["Space + drag", "Pan"], ["N", "Sticky note"], ["T", "Text"], ["D", "Task card"],
+  ["R", "Rectangle"], ["O", "Ellipse"], ["F", "Frame"], ["L", "Connector"], ["P", "Pen"], ["I", "Highlighter"],
+  ["G", "Mind map"], ["C", "Comment"], ["M", "Measure"], ["A", "Area"], ["W", "Wall"], ["K", "Set scale"], ["Q", "Revision cloud"],
+  ["Ctrl/⌘ + Z", "Undo"], ["Ctrl/⌘ + Shift + Z, Ctrl + Y", "Redo"], ["Ctrl/⌘ + A", "Select all"], ["Ctrl/⌘ + D", "Duplicate"],
+  ["Ctrl/⌘ + C, V", "Copy and paste"], ["Delete", "Delete selection"], ["Arrow keys", "Nudge (Shift for more)"],
+  ["Shift + drag", "Keep angles at 45°"], ["Esc", "Cancel or finish editing"],
+];
+
+export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
+  useEscape(onClose);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div role="dialog" aria-label="Keyboard shortcuts" className="card flex max-h-[85dvh] w-full max-w-lg flex-col p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-semibold"><Keyboard size={18} /> Keyboard shortcuts</h2>
+          <button className="btn-ghost p-1" onClick={onClose} title="Close"><X size={18} /></button>
+        </div>
+        <dl className="grid min-h-0 grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 overflow-y-auto text-sm">
+          {SHORTCUTS.map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt><kbd className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-sans text-xs">{k}</kbd></dt>
+              <dd className="text-slate-700">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
     </div>
   );
 }
@@ -288,5 +536,45 @@ export function VersionPanel({
           )}
       </div>
     </aside>
+  );
+}
+
+// ── Board details ───────────────────────────────────────────────────────────
+
+export function DetailsDialog({ title, details, folder, items, frames, sharing, teams, onClose }: {
+  title: string; details: { createdBy: string | null; createdAt: string; updatedAt: string };
+  folder: string | null; items: number; frames: number; sharing: Sharing | null; teams: { id: string; name: string }[]; onClose: () => void;
+}) {
+  useEscape(onClose);
+  const date = (iso: string) => new Date(iso).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const who = sharing && (sharing.visibility === "WORKSPACE" ? "Everyone in the workspace"
+    : sharing.visibility === "TEAM" ? `Team: ${teams.find((t) => t.id === sharing.teamId)?.name ?? "a team"}` : "Only the owner (and admins)");
+  const link = sharing && (sharing.linkAccess === "NONE" ? "Off" : sharing.linkAccess === "VIEW" ? "Anyone with the link can view" : "Anyone with the link can edit");
+  const rows: [string, string][] = [
+    ["Folder", folder ?? "No folder"],
+    ["Created by", details.createdBy ?? "Unknown"],
+    ["Created", date(details.createdAt)],
+    ["Last saved", date(details.updatedAt)],
+    ["Items", frames ? `${items}, including ${frames} frame${frames === 1 ? "" : "s"}` : String(items)],
+    ...(who ? [["Who can open it", who] as [string, string]] : []),
+    ...(link ? [["Share link", link] as [string, string]] : []),
+  ];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div role="dialog" aria-label="Board details" className="card w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="flex min-w-0 items-center gap-2 text-lg font-semibold"><Info size={18} className="shrink-0" /> <span className="truncate">{title}</span></h2>
+          <button className="btn-ghost p-1" onClick={onClose} title="Close"><X size={18} /></button>
+        </div>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+          {rows.map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-slate-500">{k}</dt>
+              <dd className="text-slate-800">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
   );
 }
