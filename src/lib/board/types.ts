@@ -48,6 +48,8 @@ export interface BaseElement {
   align?: "left" | "center" | "right";
   /** Who created it (shown on sticky notes when "Show authors" is on). */
   author?: { id: string; name: string; color?: string };
+  /** Items with the same group id are selected and moved together. */
+  groupId?: string;
   /** Set on elements created while private mode is on; others see them hidden until it ends. */
   privateOwner?: string;
 }

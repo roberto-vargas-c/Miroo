@@ -11,6 +11,7 @@ import { Logo, LogoMark } from "@/components/Logo";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { Avatar } from "@/components/Avatar";
 import { InstallButton } from "@/components/InstallButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { logout } from "@/app/actions/auth";
 import { toggleStar, toggleFolderStar } from "@/app/actions/workspace";
 import type { SidebarData } from "@/lib/sidebar";
@@ -117,7 +118,7 @@ export function AppSidebar({ data, currentBoardId, onCollapse, onNavigate }: {
           <form action={`/w/${wid}`} className="relative" onSubmit={() => onNavigate?.()}>
             <Search size={17} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-700" />
             <input ref={searchRef} name="q" defaultValue={onBoards ? params.get("q") ?? "" : ""} placeholder="Search boards"
-              className="w-full rounded-lg border border-transparent bg-transparent py-1.5 pl-9 pr-2 text-sm text-slate-700 placeholder:text-slate-700 hover:bg-slate-100 focus:border-brand-300 focus:bg-white focus:outline-none focus:placeholder:text-slate-400" />
+              className="w-full rounded-lg border border-transparent bg-transparent py-1.5 pl-9 pr-2 text-sm text-slate-700 placeholder:text-current hover:bg-slate-100 focus:border-brand-300 focus:bg-slate-50 focus:outline-none focus:placeholder:text-slate-400" />
           </form>
         </div>
 
@@ -152,6 +153,7 @@ export function AppSidebar({ data, currentBoardId, onCollapse, onNavigate }: {
           {navLink(`/w/${wid}/settings`, "Settings", Settings, pathname === `/w/${wid}/settings`)}
           {data.isAdmin && navLink(`/w/${wid}/audit`, "Audit log", ScrollText, pathname === `/w/${wid}/audit`)}
           <InstallButton className="w-full" />
+          <ThemeToggle />
         </div>
       </nav>
 
