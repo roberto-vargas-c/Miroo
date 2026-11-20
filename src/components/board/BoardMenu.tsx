@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import {
   Accessibility, BoxSelect, Check, ChevronLeft, ChevronRight, Copy, Ellipsis, Expand, Eye, FileDown, FileImage, FileSpreadsheet, Grid3x3, History,
   Import, Keyboard, LayoutDashboard, LayoutTemplate, MessageSquare, MousePointer2, PenLine, Redo2, RotateCcw, Ruler, Shrink, SlidersHorizontal,
-  Spline, Trash2, Undo2, UserRound, Wind, X, Plus, CopyPlus, Upload, FolderInput, Star, PaintBucket, ScanEye, Maximize, Info,
+  Spline, Trash2, Undo2, UserRound, Wind, X, Plus, CopyPlus, Upload, FolderInput, Star, PaintBucket, ScanEye, Maximize, Info, Moon,
 } from "lucide-react";
 import type { BoardPrefs, GridStyle } from "./boardPrefs";
 import type { WheelMode } from "./Canvas";
@@ -83,7 +83,7 @@ export const BACKGROUNDS: { color: string | null; name: string }[] = [
 export function BoardMenu({
   prefs, setPref, board, onExport, onImportCsv, onImportMiro, onSaveTemplate, onShortcuts,
   onUndo, onRedo, onSelectAll, onDuplicate, onDelete,
-  canEdit, canTemplate, frameCount, hasSelection,
+  canEdit, canTemplate, frameCount, hasSelection, dark, onToggleDark,
 }: {
   prefs: BoardPrefs; setPref: <K extends keyof BoardPrefs>(k: K, v: BoardPrefs[K]) => void;
   board: BoardActions;
@@ -91,6 +91,7 @@ export function BoardMenu({
   onShortcuts: () => void;
   onUndo: () => void; onRedo: () => void; onSelectAll: () => void; onDuplicate: () => void; onDelete: () => void;
   canEdit: boolean; canTemplate: boolean; frameCount: number; hasSelection: boolean;
+  dark?: boolean; onToggleDark?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [sub, setSub] = useState<Sub | null>(null);
@@ -217,6 +218,8 @@ export function BoardMenu({
       </>}
     </>,
     prefs: <>
+      {onToggleDark && toggle("Dark mode", <Moon size={16} />, !!dark, () => onToggleDark())}
+      {onToggleDark && divider}
       {heading("Scroll wheel")}
       {WHEEL_CHOICES.map((w) => choice(w.label, prefs.wheelMode === w.id, () => setPref("wheelMode", w.id), w.hint))}
       <p className="px-3 pb-1 pt-1 text-xs text-slate-500">Pinch always zooms.</p>

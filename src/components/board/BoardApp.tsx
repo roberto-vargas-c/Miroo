@@ -26,12 +26,14 @@ import { CropDialog, applyCrop } from "./CropDialog";
 const DocPanel = dynamic(() => import("./DocPanel").then((m) => m.DocPanel), { ssr: false });
 import { pastedNotes } from "@/lib/board/miro";
 import { MiroDialog } from "./MiroImport";
+import { setDarkMode, useDarkMode } from "@/components/ThemeToggle";
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
+import { groupRemapper } from "./arrange";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
 import { BoardMenu, CsvDialog, DetailsDialog, ShortcutsDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
-import { AiPanel, type AiResults } from "./AiPanel";
+import { AiPanel, textItems, type AiResults } from "./AiPanel";
 import { layoutClusters, summaryElement, ideaStickies, flowchartElements, mindmapElements } from "./aiLayout";
 
 const Canvas = dynamic(() => import("./Canvas").then((m) => m.Canvas), { ssr: false });
@@ -632,6 +634,7 @@ export function BoardApp(p: BoardAppProps) {
   const [archOpen, setArchOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const isPhone = useIsPhone();
+  const dark = useDarkMode();
   // Tapping anywhere outside the header closes the phone "More" menu.
   useEffect(() => {
     if (!moreOpen) return;
@@ -692,7 +695,8 @@ export function BoardApp(p: BoardAppProps) {
 
   const duplicateSelected = () => {
     const src = selected.filter((s) => s.type !== "connector");
-    const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
+    const regroup = groupRemapper();
+    const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, groupId: regroup(s.groupId), x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
     // Documents keep their content outside the element, so copy it too.
     ydoc.transact(() => src.forEach((s, i) => {
       if (s.type !== "doc") return;
@@ -730,6 +734,20 @@ export function BoardApp(p: BoardAppProps) {
   const revealEls = (els: BoardElement[]) => {
     const b = unionRect(els.filter((e) => e.type !== "connector").map(elBounds));
     if (b) requestAnimationFrame(() => canvasRef.current?.reveal(b, aiOpen ? 344 : 0));
+  };
+  const clusterByTheme = async () => {
+    const items = textItems(selected);
+    setImporting("Clustering by theme…");
+    try {
+      const res = await fetch(`/api/boards/${p.boardId}/ai${q}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cluster", items }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Couldn't cluster the selection");
+      aiCluster(data as AiResults["cluster"]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't cluster the selection");
+    } finally { setImporting(null); }
   };
   const aiCluster = (r: AiResults["cluster"]) => {
     const b = selectionBox();
@@ -927,7 +945,7 @@ export function BoardApp(p: BoardAppProps) {
         </div>
       )}
       {toast && (
-        <div className="absolute left-1/2 top-16 z-40 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white shadow-lg">{toast}</div>
+        <div className="pointer-events-none absolute bottom-36 left-1/2 z-40 max-w-[calc(100vw-24px)] -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-center text-sm text-white shadow-lg sm:bottom-20">{toast}</div>
       )}
 
       {!presenting && <>
@@ -1004,7 +1022,7 @@ export function BoardApp(p: BoardAppProps) {
           )}
           <div data-keep-open className="contents"><BoardMenu prefs={prefs} setPref={setPref} board={boardActions}
             onExport={exportBoard} onImportCsv={() => setDialog("csv")} onImportMiro={p.user ? () => setDialog("miro") : undefined} onSaveTemplate={() => setDialog("template")}
-            onShortcuts={() => setInfoDialog("shortcuts")}
+            onShortcuts={() => setInfoDialog("shortcuts")} dark={dark} onToggleDark={() => setDarkMode(!dark)}
             onUndo={api.undo} onRedo={api.redo} onSelectAll={() => setSelection(elements.map((e) => e.id))}
             onDuplicate={duplicateSelected} onDelete={() => { api.remove(selection); setSelection([]); }}
             canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0} /></div>
@@ -1057,6 +1075,8 @@ export function BoardApp(p: BoardAppProps) {
         members={p.members}
         onCrop={(el) => setCropping(el.id)}
         onQuality={reduceSelectedImages}
+        onAiCluster={p.ai ? clusterByTheme : undefined}
+        onSelect={setSelection}
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}

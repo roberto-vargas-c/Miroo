@@ -10,6 +10,7 @@ import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { Avatar } from "@/components/Avatar";
 import { avatarUrl } from "@/lib/avatar";
 import { InstallButton } from "@/components/InstallButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default async function WorkspaceLayout({ children, params }: { children: React.ReactNode; params: Promise<{ wid: string }> }) {
   const { wid } = await params;
@@ -42,6 +43,7 @@ export default async function WorkspaceLayout({ children, params }: { children: 
             </Link>
           ))}
           <InstallButton />
+          <ThemeToggle />
           <form action={logout} className="md:hidden">
             <button className="btn-ghost justify-start whitespace-nowrap"><LogOut size={16} /> Log out</button>
           </form>
