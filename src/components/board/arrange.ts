@@ -37,3 +37,15 @@ export function withGroups(ids: string[], all: BoardElement[]): string[] {
   if (!groups.size) return ids;
   return Array.from(new Set([...ids, ...all.filter((e) => e.groupId && groups.has(e.groupId)).map((e) => e.id)]));
 }
+
+export const makeGroupId = () => `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** For copies: maps each original group id to one new id, so a copied group is its own group. */
+export function groupRemapper() {
+  const map = new Map<string, string>();
+  return (g?: string) => {
+    if (!g) return undefined;
+    if (!map.has(g)) map.set(g, makeGroupId());
+    return map.get(g);
+  };
+}

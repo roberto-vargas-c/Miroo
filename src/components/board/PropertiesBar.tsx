@@ -10,7 +10,7 @@ import { ColorWheel } from "./ColorWheel";
 import { QUALITIES, type Quality } from "./imageQuality";
 import { CARD_STATUS } from "./ElementNode";
 import type { BoardApi } from "./useBoard";
-import { clusterByColor, tidyGrid } from "./arrange";
+import { clusterByColor, tidyGrid, makeGroupId } from "./arrange";
 
 export function PropertiesBar({
   selected, all, api, onDuplicate, onDelete, onSetScale, onCrop, onQuality, onAiCluster, onSelect, members = [],
@@ -32,8 +32,11 @@ export function PropertiesBar({
   useEffect(() => {
     if (!open) return;
     const close = (e: PointerEvent) => { if (!barRef.current?.contains(e.target as Node)) { setOpenRaw(null); setWheelFor(null); } };
+    // Esc closes the open panel first and keeps the selection.
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopImmediatePropagation(); setOpenRaw(null); setWheelFor(null); } };
     document.addEventListener("pointerdown", close, true);
-    return () => document.removeEventListener("pointerdown", close, true);
+    window.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("pointerdown", close, true); window.removeEventListener("keydown", esc, true); };
   }, [open]);
   if (!selected.length) return null;
   const types = new Set(selected.map((s) => s.type));
@@ -86,7 +89,7 @@ export function PropertiesBar({
 
   const isGroup = selected.length > 1 && !!first.groupId && selected.every((e) => e.groupId === first.groupId);
   const hasGroups = selected.some((e) => e.groupId);
-  const group = () => { const g = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; setAll({ groupId: g }); };
+  const group = () => setAll({ groupId: makeGroupId() });
   const ungroup = () => setAll({ groupId: undefined });
   const sep = <div className="h-6 w-px bg-slate-200" />;
   const item = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-slate-100 disabled:opacity-40";

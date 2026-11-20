@@ -28,6 +28,7 @@ import { MiroDialog } from "./MiroImport";
 import { setDarkMode, useDarkMode } from "@/components/ThemeToggle";
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
+import { groupRemapper } from "./arrange";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
 import { BoardMenu, CsvDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
@@ -632,7 +633,8 @@ export function BoardApp(p: BoardAppProps) {
 
   const duplicateSelected = () => {
     const src = selected.filter((s) => s.type !== "connector");
-    const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
+    const regroup = groupRemapper();
+    const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, groupId: regroup(s.groupId), x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
     // Documents keep their content outside the element, so copy it too.
     ydoc.transact(() => src.forEach((s, i) => {
       if (s.type !== "doc") return;

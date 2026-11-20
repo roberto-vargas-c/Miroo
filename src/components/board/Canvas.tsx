@@ -1,6 +1,6 @@
 "use client";
 
-import { withGroups } from "./arrange";
+import { withGroups, groupRemapper, makeGroupId } from "./arrange";
 import { useDarkMode } from "@/components/ThemeToggle";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Stage, Layer, Rect, Arrow, Transformer, Line, Group, Circle, Text as KText } from "react-konva";
@@ -405,7 +405,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
       if ((e.key === "Delete" || e.key === "Backspace") && selection.length) { e.preventDefault(); api.remove(selection); setSelection([]); return; }
       if (mod && e.key.toLowerCase() === "g" && selection.length) {
         e.preventDefault();
-        const gid = e.shiftKey || selection.length < 2 ? undefined : `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const gid = e.shiftKey || selection.length < 2 ? undefined : makeGroupId();
         api.updateMany(selection.map((id) => ({ id, patch: { groupId: gid } })));
         return;
       }
@@ -1201,7 +1201,6 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas(props, ref
   );
 });
 
-/** Copy elements with fresh ids, keeping connectors between copied elements attached to the copies. */
 type Box = { x: number; y: number; width: number; height: number };
 /**
  * Snaps a box to the left/center/right and top/middle/bottom lines of the other items when one is within
@@ -1256,13 +1255,15 @@ function isDarkInk(c: string) {
 /** Clipboard type that marks a copy made on this board (the value matches the copy). */
 const SCHEMA_CLIP = "application/x-schema-elements";
 
+/** Copy elements with fresh ids, keeping connectors between copied elements attached to the copies. Copied groups become new groups. */
 function duplicate(src: BoardElement[]): BoardElement[] {
   const idMap = new Map<string, string>();
   const offset = 24;
+  const newGroupId = groupRemapper();
   const copies = src.map((e) => {
     const c = makeElement(e.type, 0, 0);
     idMap.set(e.id, c.id);
-    return { ...e, id: c.id, x: e.x + offset, y: e.y + offset, z: e.type === "frame" ? e.z : Date.now() + Math.random() } as BoardElement;
+    return { ...e, id: c.id, groupId: newGroupId(e.groupId), x: e.x + offset, y: e.y + offset, z: e.type === "frame" ? e.z : Date.now() + Math.random() } as BoardElement;
   });
   return copies.map((c) => {
     if (c.type !== "connector") return c;
