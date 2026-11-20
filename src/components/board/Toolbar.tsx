@@ -47,7 +47,7 @@ export function Toolbar({
   const shapeActive = tool === "rect" || tool === "ellipse" || tool === "diamond" || tool === "shape";
 
   return (
-    <div className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 right-3 z-10 flex gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg [scrollbar-width:none] sm:bottom-auto sm:right-auto sm:top-1/2 sm:-translate-y-1/2 sm:flex-col sm:overflow-visible">
+    <div className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 right-3 z-10 flex gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg [scrollbar-width:none] sm:bottom-[4.25rem] sm:right-auto sm:top-[4.25rem] sm:my-auto sm:h-fit sm:max-h-[calc(100%-8.5rem)] sm:flex-col sm:overflow-y-auto sm:overflow-x-hidden">
       {render(TOOLS)}
       {canEdit && (
         <div className="relative">
@@ -55,7 +55,7 @@ export function Toolbar({
             <Shapes size={18} />
           </button>
           {shapesOpen && (
-            <div className="card fixed bottom-[4.75rem] left-3 right-3 z-30 grid grid-cols-6 gap-1 p-1.5 sm:absolute sm:bottom-auto sm:left-12 sm:right-auto sm:top-0 sm:w-52 sm:grid-cols-4">
+            <div className="card fixed bottom-[4.75rem] left-3 right-3 z-30 grid grid-cols-6 gap-1 p-1.5 sm:bottom-auto sm:left-[4.75rem] sm:right-auto sm:top-1/2 sm:w-52 sm:-translate-y-1/2 sm:grid-cols-4">
               {([["rect", Square, "Rectangle"], ["ellipse", Circle, "Ellipse"], ["diamond", Diamond, "Diamond"]] as const).map(([id, Icon, name]) => (
                 <button key={id} title={name} className={btn(tool === id)} onClick={() => { setTool(id); setShapesOpen(false); }}><Icon size={18} /></button>
               ))}
