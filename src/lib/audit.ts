@@ -52,6 +52,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "board.deleted": "Deleted a board",
   "board.sharing_changed": "Changed board sharing",
   "board.moved": "Moved a board to a folder",
+  "board.items_added": "Added pictures from an app",
   "folder.created": "Created a folder",
   "folder.renamed": "Renamed a folder",
   "folder.deleted": "Deleted a folder",

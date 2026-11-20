@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse, MoreHorizontal, Star } from "lucide-react";
 import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle, type DocElement, docFragment } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
+import { KeystonePicker } from "./KeystonePicker";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
 import { unionRect, bounds as elBounds } from "./geometry";
 import { ArchToolbar } from "./ArchToolbar";
@@ -1307,13 +1308,14 @@ export function BoardApp(p: BoardAppProps) {
           <form className="card w-full max-w-md space-y-3 p-5" onClick={(e) => e.stopPropagation()}
             onSubmit={(e) => { e.preventDefault(); if (embedDialog.trim()) addEmbed(embedDialog); setEmbedDialog(null); }}>
             <h2 className="text-lg font-semibold">Embed a link</h2>
-            <input autoFocus className="input" placeholder="https://… (YouTube, Vimeo, Figma, Loom or any web page)" value={embedDialog}
+            <input autoFocus className="input" placeholder="https://… (YouTube, Vimeo, Figma, Loom, Keystone or any web page)" value={embedDialog}
               onChange={(e) => setEmbedDialog(e.target.value)} />
             <p className="text-xs text-slate-500">Tip: you can also paste a link straight onto the board.</p>
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setEmbedDialog(null)}>Cancel</button>
               <button className="btn-primary">Add</button>
             </div>
+            <KeystonePicker onPick={(url) => { addEmbed(url); setEmbedDialog(null); }} />
           </form>
         </div>
       )}

@@ -27,7 +27,9 @@
     // Public address of the app, used in emailed links. The APP_URL GitHub variable overrides it.
     "APP_URL": "https://schema.robert-en-var.workers.dev",
     "EMAIL_FROM": "Schema <no-reply@schema.robertovargas.dev>",
-    "NEXT_PUBLIC_REALTIME_URL": "/realtime"
+    "NEXT_PUBLIC_REALTIME_URL": "/realtime",
+    // Keystone (the 3D design companion): Connect Keystone on boards, and the address allowed to connect for Send to Schema
+    "KEYSTONE_URL": "https://keystone.robert-en-var.workers.dev"
   },
   "observability": { "enabled": true }
 }
