@@ -3,7 +3,7 @@ import { Star, Users, Lock, Folder, FolderPlus } from "lucide-react";
 import { db } from "@/lib/db";
 import { atLeast } from "@/lib/permissions";
 import { loadWorkspace } from "@/lib/workspace";
-import { toggleStar, deleteBoard, createFolder, renameFolder, deleteFolder, moveBoardToFolder } from "@/app/actions/workspace";
+import { toggleStar, toggleFolderStar, deleteBoard, createFolder, renameFolder, deleteFolder, moveBoardToFolder } from "@/app/actions/workspace";
 import { AutoSubmitSelect } from "@/components/AutoSubmitSelect";
 import { NewBoardButton } from "@/components/NewBoardButton";
 import { ConfirmButton } from "@/components/ConfirmButton";
@@ -23,6 +23,7 @@ export default async function BoardsPage({
   const teams = await db.team.findMany({ where: { workspaceId: wid }, orderBy: { name: "asc" } });
   const folders = await db.folder.findMany({ where: { workspaceId: wid }, orderBy: { name: "asc" } });
   const currentFolder = folder ? folders.find((f) => f.id === folder) : undefined;
+  const starredFolderIds = new Set((await db.folderStar.findMany({ where: { userId: user.id, folder: { workspaceId: wid } }, select: { folderId: true } })).map((s) => s.folderId));
   const templates = await db.boardTemplate.findMany({
     where: { workspaceId: wid }, orderBy: { createdAt: "desc" },
     select: { id: true, name: true, description: true, createdById: true },
@@ -113,6 +114,23 @@ export default async function BoardsPage({
         )}
       </div>
 
+      {starred && starredFolderIds.size > 0 && (
+        <div className="mt-6">
+          <h2 className="text-sm font-medium text-slate-500">Starred projects</h2>
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {folders.filter((f) => starredFolderIds.has(f.id)).map((f) => (
+              <li key={f.id}>
+                <Link href={`/w/${wid}?folder=${f.id}`} className="card flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50">
+                  <Folder size={16} className="text-brand-600" /> {f.name}
+                  <Star size={14} className="text-amber-500" fill="currentColor" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <h2 className="mt-6 text-sm font-medium text-slate-500">Starred boards</h2>
+        </div>
+      )}
+
       {currentFolder && (
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <Folder size={18} className="text-brand-600" />
@@ -121,6 +139,17 @@ export default async function BoardsPage({
               <input name="name" defaultValue={currentFolder.name} className="rounded-md border border-transparent bg-transparent px-1 py-0.5 text-lg font-semibold hover:border-slate-200 focus:border-brand-500 focus:outline-none" aria-label="Folder name" />
             </form>
           ) : <h2 className="text-lg font-semibold">{currentFolder.name}</h2>}
+          <form action={toggleFolderStar.bind(null, currentFolder.id)}>
+            {starredFolderIds.has(currentFolder.id) ? (
+              <button title="Unstar this project" className="flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-amber-600 hover:bg-amber-50">
+                <Star size={16} fill="currentColor" /> Starred
+              </button>
+            ) : (
+              <button title="Star this project" className="flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 hover:text-amber-600">
+                <Star size={16} /> Star
+              </button>
+            )}
+          </form>
           {isAdmin && (
             <ConfirmButton action={deleteFolder.bind(null, currentFolder.id)} message={`Delete the folder “${currentFolder.name}”? Its boards are kept and move out of the folder.`}
               className="ml-auto text-xs text-slate-400 hover:text-rose-600">
@@ -131,7 +160,7 @@ export default async function BoardsPage({
       )}
 
       {boards.length === 0 ? (
-        <div className="card mt-8 p-12 text-center text-slate-500">{currentFolder ? "This folder is empty. Create a board here, or move one in from All boards." : "No boards yet. Create one to get started."}</div>
+        <div className="card mt-8 p-12 text-center text-slate-500">{starred ? "No starred boards yet. Use the star on a board to keep it here and in the sidebar." : currentFolder ? "This folder is empty. Create a board here, or move one in from All boards." : "No boards yet. Create one to get started."}</div>
       ) : (
         <ul className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {boards.map((b) => {
