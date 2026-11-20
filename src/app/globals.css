@@ -71,3 +71,44 @@ body { background: #f6f7f9; color: var(--color-ink); }
 .doc-editor p.is-empty::before, .doc-editor h1.is-empty::before {
   content: attr(data-placeholder); color: #94a3b8; float: left; height: 0; pointer-events: none;
 }
+
+/* ── Dark mode ───────────────────────────────────────────────────────────
+   Light is the default. `html.dark` (set by ThemeToggle, remembered per browser) remaps the light
+   surfaces, borders and greys used across the app; colored accents stay as they are. */
+html.dark { color-scheme: dark; }
+html.dark body { background: #12171e; color: #e2e8f0; }
+html.dark .bg-white, html.dark .card, html.dark .input, html.dark .btn-outline { background-color: #1c232d; }
+html.dark .bg-slate-50 { background-color: #212934; }
+html.dark .bg-slate-100 { background-color: #29323e; }
+html.dark .bg-slate-200 { background-color: #343e4c; }
+html.dark .bg-slate-300 { background-color: #475262; }
+html.dark .bg-brand-50 { background-color: rgba(20, 163, 139, 0.18); }
+html.dark .bg-violet-50 { background-color: rgba(139, 92, 246, 0.18); }
+html.dark .bg-rose-50 { background-color: rgba(244, 63, 94, 0.15); }
+html.dark .bg-amber-50 { background-color: rgba(245, 158, 11, 0.14); }
+@media (hover: hover) {
+  html.dark .hover\:bg-slate-100:hover, html.dark .btn-ghost:hover, html.dark .hover\:bg-white:hover { background-color: #29323e; }
+  html.dark .hover\:bg-slate-50:hover, html.dark .btn-outline:hover { background-color: #232b36; }
+  html.dark .hover\:bg-rose-50:hover { background-color: rgba(244, 63, 94, 0.15); }
+  html.dark .hover\:text-slate-800:hover, html.dark .hover\:text-slate-700:hover { color: #f1f5f9; }
+}
+html.dark .border-slate-50, html.dark .border-slate-100 { border-color: #2a333f; }
+html.dark .border-slate-200, html.dark .card { border-color: #323c49; }
+html.dark .border-slate-300, html.dark .input, html.dark .btn-outline { border-color: #445061; }
+html.dark .divide-slate-100 > * + * { border-color: #2a333f; }
+html.dark .ring-white { --tw-ring-color: #1c232d; }
+html.dark .ring-slate-200 { --tw-ring-color: #323c49; }
+html.dark .ring-amber-200 { --tw-ring-color: rgba(245, 158, 11, 0.35); }
+html.dark .text-slate-400 { color: #7f8b9c; }
+html.dark .text-slate-500 { color: #95a1b2; }
+html.dark .text-slate-600 { color: #aeb9c7; }
+html.dark .text-slate-700, html.dark .btn-ghost, html.dark .label { color: #cbd5e1; }
+html.dark .text-slate-800, html.dark .btn-outline { color: #e2e8f0; }
+html.dark .text-slate-900, html.dark .text-ink { color: #f1f5f9; }
+html.dark .text-brand-700 { color: #5eead4; }
+html.dark .text-amber-800, html.dark .text-amber-900 { color: #fcd34d; }
+html.dark .shadow-lg, html.dark .shadow-xl, html.dark .shadow-sm { --tw-shadow-color: rgba(0, 0, 0, 0.5); }
+html.dark .doc-editor { color: #e2e8f0; }
+html.dark .doc-editor code { background: #29323e; }
+html.dark .doc-editor blockquote { border-color: #475262; color: #aeb9c7; }
+html.dark .doc-editor hr { border-color: #323c49; }

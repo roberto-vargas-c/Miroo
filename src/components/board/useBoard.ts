@@ -26,7 +26,13 @@ export type Peer = {
 export type TimerState = { running: boolean; endsAt: number; remainingMs: number; durationMs: number; by: string } | null;
 export type VoteSession = { id: string; title: string; votesPerUser: number; open: boolean; anonymous: boolean; by: string; startedAt: number } | null;
 export type PrivateMode = { on: boolean; by: string } | null;
-export type SessionState = { timer: TimerState; vote: VoteSession; privateMode: PrivateMode; boardScale: BoardScale; unit: Unit | null };
+export type SessionState = {
+  timer: TimerState; vote: VoteSession; privateMode: PrivateMode; boardScale: BoardScale; unit: Unit | null;
+  /** Board background color chosen in the board menu (null: the default). */
+  background: string | null;
+  /** Where the board opens for everyone (null: fit the whole board). */
+  startView: Viewport | null;
+};
 
 export type ConnStatus = "connecting" | "connected" | "disconnected" | "denied";
 
@@ -42,7 +48,7 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
   const sessionMap = useMemo(() => doc.getMap<unknown>("session"), [doc]);
   // votes: key "<voteId>|<userId>" -> element ids that user voted for
   const votesMap = useMemo(() => doc.getMap<string[]>("votes"), [doc]);
-  const [session, setSession] = useState<SessionState>({ timer: null, vote: null, privateMode: null, boardScale: null, unit: null });
+  const [session, setSession] = useState<SessionState>({ timer: null, vote: null, privateMode: null, boardScale: null, unit: null, background: null, startView: null });
   const [votes, setVotes] = useState<Map<string, string[]>>(new Map());
   const providerRef = useRef<WebsocketProvider | null>(null);
   const meRef = useRef<{ id: string; name: string; color: string } | null>(null);
@@ -61,6 +67,8 @@ export function useBoard(boardId: string, shareToken: string | null, realtimeUrl
       privateMode: (sessionMap.get("privateMode") as PrivateMode) ?? null,
       boardScale: (sessionMap.get("boardScale") as BoardScale) ?? null,
       unit: (sessionMap.get("unit") as Unit) ?? null,
+      background: (sessionMap.get("background") as string) ?? null,
+      startView: (sessionMap.get("startView") as Viewport) ?? null,
     });
     const updVotes = () => setVotes(new Map(votesMap.entries()));
     sessionMap.observe(upd);

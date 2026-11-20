@@ -1,68 +1,18 @@
-import Link from "next/link";
-import { LayoutGrid, Users, UserCog, Settings, LogOut, ScrollText, UserRound } from "lucide-react";
-import { atLeast } from "@/lib/permissions";
+import { cookies } from "next/headers";
 import { VerifyBanner } from "@/components/VerifyBanner";
-import { db } from "@/lib/db";
 import { loadWorkspace } from "@/lib/workspace";
-import { logout } from "@/app/actions/auth";
-import { Logo, LogoMark } from "@/components/Logo";
-import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
-import { Avatar } from "@/components/Avatar";
-import { avatarUrl } from "@/lib/avatar";
-import { InstallButton } from "@/components/InstallButton";
+import { loadSidebar } from "@/lib/sidebar";
+import { WorkspaceShell } from "@/components/AppSidebar";
+import { SIDEBAR_COOKIE } from "@/lib/sidebarCookie";
 
 export default async function WorkspaceLayout({ children, params }: { children: React.ReactNode; params: Promise<{ wid: string }> }) {
   const { wid } = await params;
-  const { user, workspace, role } = await loadWorkspace(wid);
-  const all = await db.workspaceMember.findMany({
-    where: { userId: user.id },
-    include: { workspace: { select: { id: true, name: true } } },
-    orderBy: { createdAt: "asc" },
-  });
-  const nav = [
-    { href: `/w/${wid}`, label: "Boards", icon: LayoutGrid },
-    { href: `/w/${wid}/teams`, label: "Teams", icon: Users },
-    { href: `/w/${wid}/members`, label: "Members", icon: UserCog },
-    { href: `/w/${wid}/settings`, label: "Settings", icon: Settings },
-    ...(atLeast(role, "ADMIN") ? [{ href: `/w/${wid}/audit`, label: "Audit log", icon: ScrollText }] : []),
-    { href: `/w/${wid}/profile`, label: "Profile", icon: UserRound },
-  ];
+  const { user, role } = await loadWorkspace(wid);
+  const [sidebar, jar] = await Promise.all([loadSidebar(wid, user, role), cookies()]);
   return (
-    <div className="flex min-h-full flex-col md:flex-row">
-      <aside className="flex shrink-0 flex-col gap-3 border-b border-slate-200 bg-white p-3 md:min-h-screen md:w-64 md:gap-6 md:border-b-0 md:border-r md:p-4">
-        <div className="flex items-center gap-3 md:flex-col md:items-stretch md:gap-6">
-          <Link href="/w" className="shrink-0"><span className="md:hidden"><LogoMark /></span><span className="hidden md:inline"><Logo /></span></Link>
-          <div className="min-w-0 flex-1"><WorkspaceSwitcher current={{ id: workspace.id, name: workspace.name }} all={all.map((m) => m.workspace)} /></div>
-          <Link href={`/w/${wid}/profile`} className="shrink-0 md:hidden" title="Your profile"><Avatar name={user.name} color={user.color} src={avatarUrl(user)} /></Link>
-        </div>
-        <nav className="-mx-3 flex gap-1 overflow-x-auto px-3 [scrollbar-width:none] md:mx-0 md:flex-col md:px-0">
-          {nav.map(({ href, label, icon: Icon }) => (
-            <Link key={href} href={href} className="btn-ghost justify-start whitespace-nowrap">
-              <Icon size={16} /> {label}
-            </Link>
-          ))}
-          <InstallButton />
-          <form action={logout} className="md:hidden">
-            <button className="btn-ghost justify-start whitespace-nowrap"><LogOut size={16} /> Log out</button>
-          </form>
-        </nav>
-        <div className="mt-auto hidden items-center gap-2 md:flex">
-          <Link href={`/w/${wid}/profile`} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg hover:bg-slate-50" title="Your profile">
-            <Avatar name={user.name} color={user.color} src={avatarUrl(user)} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{user.name}</div>
-              <div className="text-xs text-slate-500">{role.toLowerCase()}</div>
-            </div>
-          </Link>
-          <form action={logout}>
-            <button className="btn-ghost p-2" title="Log out"><LogOut size={16} /></button>
-          </form>
-        </div>
-      </aside>
-      <main className="min-w-0 flex-1 p-4 md:p-8">
-        {!user.emailVerifiedAt && <VerifyBanner email={user.email} />}
-        {children}
-      </main>
-    </div>
+    <WorkspaceShell data={sidebar} initialOpen={jar.get(SIDEBAR_COOKIE)?.value !== "closed"}>
+      {!user.emailVerifiedAt && <VerifyBanner email={user.email} />}
+      {children}
+    </WorkspaceShell>
   );
 }

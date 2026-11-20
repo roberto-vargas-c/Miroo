@@ -3,14 +3,17 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse, MoreHorizontal } from "lucide-react";
+import { Undo2, Redo2, ExternalLink, ChevronLeft, ChevronRight, History, Maximize, MessageSquare, Minus, Plus, Share2, Presentation, Vote, Users, X, Sparkles, Move, ZoomIn, Mouse, MoreHorizontal, Star } from "lucide-react";
 import { makeElement, type BoardElement, type ImageElement, type EmbedElement, type ConnectorElement, type VideoElement, type StickerElement, type ConnectorStyle, type DocElement, docFragment } from "@/lib/board/types";
 import { embedUrlFor, looksLikeUrl } from "./embeds";
 import { PT_IN_METERS, formatLength, metersPerPxOfPlan, type Unit } from "@/lib/board/arch";
 import { unionRect, bounds as elBounds } from "./geometry";
 import { ArchToolbar } from "./ArchToolbar";
 import { ScaleDialog } from "./ScaleDialog";
-import { renameBoard } from "@/app/actions/workspace";
+import { createBoard, deleteBoard, duplicateBoard, moveBoardToFolder, renameBoard, toggleStar } from "@/app/actions/workspace";
+import { useBoardPrefs } from "./boardPrefs";
+import { SidebarDrawer, SidebarToggleButton, useSidebarShortcut } from "@/components/AppSidebar";
+import type { SidebarData } from "@/lib/sidebar";
 import { LogoMark } from "@/components/Logo";
 import { Avatar } from "@/components/Avatar";
 import * as Y from "yjs";
@@ -25,12 +28,14 @@ import { CropDialog, applyCrop } from "./CropDialog";
 const DocPanel = dynamic(() => import("./DocPanel").then((m) => m.DocPanel), { ssr: false });
 import { decodeMiroClipboard, htmlImageSources, miroBoardId, pastedNotes, type MiroClip } from "@/lib/board/miro";
 import { MiroDialog, MiroPasteDialog, getMiroToken, setMiroToken } from "./MiroImport";
+import { setDarkMode, useDarkMode } from "@/components/ThemeToggle";
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
+import { groupRemapper } from "./arrange";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
-import { BoardMenu, CsvDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
-import { AiPanel, type AiResults } from "./AiPanel";
+import { BoardMenu, CsvDialog, DetailsDialog, ShortcutsDialog, TemplateDialog, VersionPanel, type ExportKind } from "./BoardMenu";
+import { AiPanel, textItems, type AiResults } from "./AiPanel";
 import { layoutClusters, summaryElement, ideaStickies, flowchartElements, mindmapElements } from "./aiLayout";
 
 const Canvas = dynamic(() => import("./Canvas").then((m) => m.Canvas), { ssr: false });
@@ -50,6 +55,14 @@ export type BoardAppProps = {
   ai?: boolean;
   /** Workspace members, for assigning task cards. */
   members: { id: string; name: string; color: string }[];
+  /** The app sidebar (Home, Starred, Projects…), for workspace members. */
+  sidebar?: SidebarData | null;
+  /** Whether the viewer starred this board; null when they can't star it. */
+  starred?: boolean | null;
+  /** Workspace folders, for "Move to". */
+  folders?: { id: string; name: string }[];
+  /** Shown in Board › Details (workspace members only). */
+  details?: { folderId: string | null; createdBy: string | null; createdAt: string; updatedAt: string } | null;
 };
 
 export function BoardApp(p: BoardAppProps) {
@@ -67,6 +80,11 @@ export function BoardApp(p: BoardAppProps) {
   const [selection, setSelectionState] = useState<string[]>([]);
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, scale: 1 });
   const [title, setTitle] = useState(p.title);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  useSidebarShortcut(() => { if (p.sidebar) setSidebarOpen((o) => !o); });
+  const [starred, setStarred] = useState(!!p.starred);
+  useEffect(() => setStarred(!!p.starred), [p.starred]);
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentDraft, setCommentDraft] = useState<{ x: number; y: number } | null>(null);
@@ -74,16 +92,18 @@ export function BoardApp(p: BoardAppProps) {
   const [showResolved, setShowResolved] = useState(false);
   const [penColor, setPenColor] = useState("#111827");
   const [penWidth, setPenWidth] = useState(3);
-  const [showAuthors, setShowAuthors] = useState(false);
-  useEffect(() => { try { setShowAuthors(localStorage.getItem("schema.showAuthors") === "1"); } catch { /* ignore */ } }, []);
-  const [wheelMode, setWheelMode] = useState<WheelMode>("auto");
-  useEffect(() => { try { const m = localStorage.getItem("schema.wheelMode"); if (m === "zoom" || m === "pan" || m === "auto") setWheelMode(m); } catch { /* ignore */ } }, []);
+  // Per-person view settings from the board menu, kept in this browser.
+  const [prefs, setPref] = useBoardPrefs();
+  const { showAuthors, wheelMode } = prefs;
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
   const cycleWheelMode = () => {
     const next: WheelMode = wheelMode === "auto" ? "zoom" : wheelMode === "zoom" ? "pan" : "auto";
-    setWheelMode(next);
-    try { localStorage.setItem("schema.wheelMode", next); } catch { /* ignore */ }
+    setPref("wheelMode", next);
     setToast(`Scroll wheel: ${WHEEL_LABEL[next]}`);
   };
+  const [folderId, setFolderId] = useState(p.details?.folderId ?? null);
+  const [infoDialog, setInfoDialog] = useState<"shortcuts" | "details" | null>(null);
   const [highlightWidth, setHighlightWidth] = useState(18);
   const [connectorStyle, setConnectorStyle] = useState<ConnectorStyle>("curved");
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +135,7 @@ export function BoardApp(p: BoardAppProps) {
   const anim = useRef<number | null>(null);
   const flyTo = useCallback((target: Camera, ms = 450) => {
     if (anim.current) cancelAnimationFrame(anim.current);
+    if (prefsRef.current.reduceMotion) { anim.current = null; setCamera(target); return; }
     const from = cameraRef.current;
     const t0 = performance.now();
     const step = (t: number) => {
@@ -288,6 +309,56 @@ export function BoardApp(p: BoardAppProps) {
   }, [presenter?.clientId, presenting]); // eslint-disable-line react-hooks/exhaustive-deps
   const [presentMenu, setPresentMenu] = useState(false);
 
+  // ── Board menu › Board ──
+  const member = !!p.user && !!p.workspaceId;
+  const manage = member && p.canManage;
+  const fail = (what: string) => (e: unknown) => {
+    // A server action that redirects rejects with Next's redirect signal: let it through.
+    if (e && typeof e === "object" && "digest" in e && String((e as { digest: unknown }).digest).startsWith("NEXT_REDIRECT")) throw e;
+    setError(`Couldn't ${what}. Try again.`);
+  };
+  const boardActions = {
+    onNew: member ? () => {
+      const fd = new FormData();
+      fd.set("template", "blank");
+      if (folderId) fd.set("folderId", folderId);
+      setImporting("Creating a board…");
+      createBoard(p.workspaceId!, fd).catch(fail("create a board")).finally(() => setImporting(null));
+    } : undefined,
+    onDuplicate: member ? () => {
+      setImporting("Duplicating the board…");
+      // The live board is saved a moment after each change, so give the last edits time to land.
+      setTimeout(() => duplicateBoard(p.boardId).catch(fail("duplicate the board")).finally(() => setImporting(null)), 1800);
+    } : undefined,
+    folders: p.folders,
+    folderId,
+    onMove: manage && p.folders?.length ? (id: string | null) => {
+      const fd = new FormData();
+      fd.set("folderId", id ?? "");
+      moveBoardToFolder(p.boardId, fd)
+        .then(() => { setFolderId(id); setToast(id ? `Moved to ${p.folders?.find((f) => f.id === id)?.name}.` : "Moved out of its folder."); })
+        .catch(fail("move the board"));
+    } : undefined,
+    starred,
+    onToggleStar: member && p.starred != null ? () => {
+      setStarred((v) => !v);
+      toggleStar(p.boardId).catch((e) => { setStarred((v) => !v); fail("star the board")(e); });
+    } : undefined,
+    onDelete: manage ? () => {
+      if (!window.confirm(`Delete “${title}” for everyone? This can't be undone.`)) return;
+      deleteBoard(p.boardId).then(() => { window.location.href = `/w/${p.workspaceId}`; }).catch(fail("delete the board"));
+    } : undefined,
+    background: session.background,
+    onBackground: canEdit ? (c: string | null) => api.setSession("background", c) : undefined,
+    hasStartView: !!session.startView,
+    onStartView: canEdit ? (set: boolean) => {
+      api.setSession("startView", set ? myViewport() : null);
+      setToast(set ? "The board now opens on this view for everyone." : "The board now opens on the whole board.");
+    } : undefined,
+    onHistory: canEditBoard ? () => { setHistoryOpen(true); setAiOpen(false); setCommentsOpen(false); setVoteOpen(false); } : undefined,
+    onDetails: p.details ? () => setInfoDialog("details") : undefined,
+  };
+
   // Fit the board to the screen once the first sync arrives.
   const fitted = useRef(false);
   useEffect(() => {
@@ -296,7 +367,8 @@ export function BoardApp(p: BoardAppProps) {
     const tryFit = () => {
       if (!canvasRef.current) return void setTimeout(tryFit, 50);
       fitted.current = true;
-      canvasRef.current.fitContent();
+      if (session.startView) setCamera(cameraForViewport(session.startView));
+      else canvasRef.current.fitContent();
     };
     tryFit();
   }, [synced]);
@@ -558,6 +630,7 @@ export function BoardApp(p: BoardAppProps) {
   const [archOpen, setArchOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const isPhone = useIsPhone();
+  const dark = useDarkMode();
   // Tapping anywhere outside the header closes the phone "More" menu.
   useEffect(() => {
     if (!moreOpen) return;
@@ -715,7 +788,8 @@ export function BoardApp(p: BoardAppProps) {
 
   const duplicateSelected = () => {
     const src = selected.filter((s) => s.type !== "connector");
-    const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
+    const regroup = groupRemapper();
+    const copies: BoardElement[] = src.map((s) => ({ ...s, id: makeElement(s.type, 0, 0).id, groupId: regroup(s.groupId), x: s.x + 24, y: s.y + 24, z: Date.now() + Math.random() }));
     // Documents keep their content outside the element, so copy it too.
     ydoc.transact(() => src.forEach((s, i) => {
       if (s.type !== "doc") return;
@@ -753,6 +827,20 @@ export function BoardApp(p: BoardAppProps) {
   const revealEls = (els: BoardElement[]) => {
     const b = unionRect(els.filter((e) => e.type !== "connector").map(elBounds));
     if (b) requestAnimationFrame(() => canvasRef.current?.reveal(b, aiOpen ? 344 : 0));
+  };
+  const clusterByTheme = async () => {
+    const items = textItems(selected);
+    setImporting("Clustering by theme…");
+    try {
+      const res = await fetch(`/api/boards/${p.boardId}/ai${q}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cluster", items }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Couldn't cluster the selection");
+      aiCluster(data as AiResults["cluster"]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't cluster the selection");
+    } finally { setImporting(null); }
   };
   const aiCluster = (r: AiResults["cluster"]) => {
     const b = selectionBox();
@@ -896,6 +984,11 @@ export function BoardApp(p: BoardAppProps) {
         onOpenDoc={(id) => setOpenDoc(id)}
         placing={placing}
         showAuthors={showAuthors}
+        grid={prefs.grid}
+        background={session.background}
+        showCursors={prefs.showCursors}
+        showConnectors={prefs.showConnectors}
+        showDimensions={prefs.showDimensions}
         onPlace={onPlace}
         onCancelPlace={() => setPlacing(null)}
         onCopyDoc={(from, to) => ydoc.transact(() => copyXml(ydoc.getXmlFragment(docFragment(from)), ydoc.getXmlFragment(docFragment(to))))}
@@ -907,9 +1000,9 @@ export function BoardApp(p: BoardAppProps) {
         onCalibrate={(l) => setScaleDialog({ lengthPx: Math.hypot(l.x2 - l.x1, l.y2 - l.y1), plan: planAt({ x: (l.x1 + l.x2) / 2, y: (l.y1 + l.y2) / 2 }) })}
         onComment={(pt) => { setCommentDraft(pt); setCommentsOpen(true); setActiveComment(null); }}
         overlay={<>
-          {!presenting && <CommentPins comments={comments.comments} camera={camera} activeId={activeComment} draft={commentDraft} showResolved={showResolved}
+          {!presenting && prefs.showComments && <CommentPins comments={comments.comments} camera={camera} activeId={activeComment} draft={commentDraft} showResolved={showResolved}
             onOpen={(id) => { setActiveComment(id); setCommentsOpen(true); }} />}
-          {floating.map((r) => (
+          {!prefs.reduceMotion && floating.map((r) => (
             <div key={r.key} className="reaction-float pointer-events-none absolute z-[6] text-4xl"
               style={{ left: r.x * camera.scale + camera.x - 20, top: r.y * camera.scale + camera.y - 20 }}>{r.emoji}</div>
           ))}
@@ -945,16 +1038,19 @@ export function BoardApp(p: BoardAppProps) {
         </div>
       )}
       {toast && (
-        <div className="absolute left-1/2 top-16 z-40 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white shadow-lg">{toast}</div>
+        <div className="pointer-events-none absolute bottom-36 left-1/2 z-40 max-w-[calc(100vw-24px)] -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-center text-sm text-white shadow-lg sm:bottom-20">{toast}</div>
       )}
 
+      {p.sidebar && <SidebarDrawer data={p.sidebar} open={sidebarOpen && !presenting} onClose={closeSidebar} currentBoardId={p.boardId} />}
       {!presenting && <>
       {/* Top bar */}
       <header className="absolute left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex items-center gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-1 rounded-xl sm:flex-none border border-slate-200 bg-white px-2 py-1.5 shadow-lg">
-          <Link href={p.workspaceId ? `/w/${p.workspaceId}` : "/w"} className="btn-ghost p-1.5" title="Back to boards">
-            <ChevronLeft size={18} /><LogoMark size={22} />
-          </Link>
+          {p.sidebar ? <SidebarToggleButton onClick={() => setSidebarOpen(true)} /> : (
+            <Link href={p.workspaceId ? `/w/${p.workspaceId}` : "/w"} className="btn-ghost p-1.5" title="Back to boards">
+              <ChevronLeft size={18} /><LogoMark size={22} />
+            </Link>
+          )}
           <input
             className="w-0 min-w-0 flex-1 rounded-md bg-transparent px-1 py-1 text-sm font-medium sm:w-auto sm:max-w-[40vw] sm:flex-none sm:px-2 outline-none hover:bg-slate-50 focus:bg-slate-50"
             value={title}
@@ -963,6 +1059,13 @@ export function BoardApp(p: BoardAppProps) {
             onBlur={() => { if (title.trim() && title !== p.title) renameBoard(p.boardId, title).catch(() => setTitle(p.title)); }}
             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           />
+          {p.starred != null && (
+            <button type="button" className={`btn-ghost shrink-0 p-1.5 ${starred ? "text-amber-500 hover:text-amber-600" : "text-slate-400"}`}
+              title={starred ? "Unstar this board" : "Star this board"} aria-label={starred ? "Unstar this board" : "Star this board"} aria-pressed={starred}
+              onClick={() => { setStarred((v) => !v); toggleStar(p.boardId).catch(() => setStarred((v) => !v)); }}>
+              <Star size={16} fill={starred ? "currentColor" : "none"} />
+            </button>
+          )}
           <span className={`mx-1 h-2 w-2 shrink-0 rounded-full ${status === "connected" ? "bg-emerald-500" : "bg-amber-400"}`}
             title={status === "connected" ? "Live" : "Reconnecting…"} />
           {!canEdit && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">View only</span>}
@@ -1020,9 +1123,12 @@ export function BoardApp(p: BoardAppProps) {
               <History size={18} />
             </button>
           )}
-          <div data-keep-open className="contents"><BoardMenu onExport={exportBoard} onImportCsv={() => setDialog("csv")} onImportMiro={p.user ? () => setDialog("miro") : undefined} onSaveTemplate={() => setDialog("template")}
-            canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0}
-            showAuthors={showAuthors} onToggleAuthors={() => setShowAuthors((v) => { try { localStorage.setItem("schema.showAuthors", v ? "0" : "1"); } catch { /* ignore */ } return !v; })} /></div>
+          <div data-keep-open className="contents"><BoardMenu prefs={prefs} setPref={setPref} board={boardActions}
+            onExport={exportBoard} onImportCsv={() => setDialog("csv")} onImportMiro={p.user ? () => setDialog("miro") : undefined} onSaveTemplate={() => setDialog("template")}
+            onShortcuts={() => setInfoDialog("shortcuts")} dark={dark} onToggleDark={() => setDarkMode(!dark)}
+            onUndo={api.undo} onRedo={api.redo} onSelectAll={() => setSelection(elements.map((e) => e.id))}
+            onDuplicate={duplicateSelected} onDelete={() => { api.remove(selection); setSelection([]); }}
+            canEdit={canEdit} canTemplate={canEditBoard && !!p.user && !!p.workspaceId} frameCount={frames.length} hasSelection={selected.length > 0} /></div>
           </div>
           {p.sharing && <button className="btn-primary px-2.5 py-1.5 sm:px-4" title="Share" onClick={() => setShareOpen(true)}><Share2 size={16} /> <span className="hidden sm:inline">Share</span></button>}
         </div>
@@ -1072,6 +1178,8 @@ export function BoardApp(p: BoardAppProps) {
         members={p.members}
         onCrop={(el) => setCropping(el.id)}
         onQuality={reduceSelectedImages}
+        onAiCluster={p.ai ? clusterByTheme : undefined}
+        onSelect={setSelection}
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}
@@ -1086,7 +1194,7 @@ export function BoardApp(p: BoardAppProps) {
           title={`Scroll wheel: ${WHEEL_LABEL[wheelMode]}. Click to change. Pinch always zooms.`}>
           {wheelMode === "pan" ? <Move size={16} /> : wheelMode === "zoom" ? <ZoomIn size={16} /> : <Mouse size={16} />}
         </button>
-        {canEdit && (
+        {canEdit && prefs.showUndoRedo && (
           <>
             <div className="mx-0.5 h-5 w-px bg-slate-200" />
             <button className="btn-ghost p-1.5" title="Undo (Ctrl+Z)" onClick={api.undo}><Undo2 size={16} /></button>
@@ -1130,6 +1238,11 @@ export function BoardApp(p: BoardAppProps) {
           onPreview={(v) => { setSelection([]); setPreview(v); if (v) requestAnimationFrame(() => canvasRef.current?.fitContent()); }}
           onRestored={(msg) => setToast(msg)}
           onClose={() => { setHistoryOpen(false); setPreview(null); }} />
+      )}
+      {infoDialog === "shortcuts" && <ShortcutsDialog onClose={() => setInfoDialog(null)} />}
+      {infoDialog === "details" && p.details && (
+        <DetailsDialog title={title} details={p.details} folder={p.folders?.find((f) => f.id === folderId)?.name ?? null}
+          items={elements.length} frames={frames.length} sharing={p.sharing} teams={p.teams} onClose={() => setInfoDialog(null)} />
       )}
       {dialog === "csv" && canEdit && (
         <CsvDialog at={canvasRef.current?.viewportCenter() ?? { x: 0, y: 0 }} members={p.members} onClose={() => setDialog(null)}

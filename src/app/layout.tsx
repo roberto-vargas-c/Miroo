@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { PRODUCT_NAME, PRODUCT_TAGLINE } from "@/lib/brand";
 import { RegisterSW } from "@/components/RegisterSW";
+import { THEME_SCRIPT } from "@/components/ThemeToggle";
 
 export const metadata: Metadata = {
   title: PRODUCT_NAME,
@@ -14,7 +15,8 @@ export const viewport: Viewport = { themeColor: "#0d6b5e", viewportFit: "cover" 
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head><script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} /></head>
       <body className="antialiased">
         {children}
         <RegisterSW />

@@ -58,6 +58,7 @@ model User {
   comments    Comment[]
   invitesSent Invite[]          @relation("InviteSender")
   stars       BoardStar[]
+  folderStars FolderStar[]
 }
 
 model Workspace {
@@ -207,10 +208,23 @@ model Folder {
   name        String
   createdAt   DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   boards    Board[]
+  stars     FolderStar[]
 
   @@index([workspaceId])
+}
+
+/// A folder (project) someone starred, shown under Starred in their sidebar.
+model FolderStar {
+  userId    String
+  folderId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder Folder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+
+  @@id([userId, folderId])
 }
 
 /// A snapshot of a board's Yjs document. Saved automatically every few minutes while people
