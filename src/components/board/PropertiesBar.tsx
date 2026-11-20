@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUpToLine, ArrowDownToLine, Copy, Trash2, Lock, Unlock, ArrowLeftRight, Scale, FlipHorizontal2, FlipVertical2, Crop, AlignLeft, AlignCenter, AlignRight,
   AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal,
   AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter, ChevronDown, Image as ImageIcon, LayoutGrid, LayoutPanelLeft, Grid3x3, Palette,
-  Sparkles, Group as GroupIcon, Ungroup, Table2, Filter } from "lucide-react";
+  Sparkles, Group as GroupIcon, Ungroup, Table2, Filter, Download } from "lucide-react";
 import { FONTS, fontFamily, STICKY_COLORS, SHAPE_COLORS, type BoardElement, type ConnectorElement, type ConnectorStyle, type CardElement, type ImageElement, type TableElement } from "@/lib/board/types";
 import { ColorWheel } from "./ColorWheel";
 import { QUALITIES, type Quality } from "./imageQuality";
@@ -13,7 +13,7 @@ import type { BoardApi } from "./useBoard";
 import { clusterByColor, tidyGrid, makeGroupId } from "./arrange";
 
 export function PropertiesBar({
-  selected, all, api, onDuplicate, onDelete, onSetScale, onCrop, onQuality, onAiCluster, onSelect, members = [],
+  selected, all, api, onDuplicate, onDelete, onSetScale, onCrop, onQuality, onAiCluster, onSelect, onDownload, members = [],
 }: {
   selected: BoardElement[]; all: BoardElement[]; api: BoardApi; onDuplicate: () => void; onDelete: () => void; onSetScale?: () => void;
   onCrop?: (el: ImageElement) => void;
@@ -22,6 +22,8 @@ export function PropertiesBar({
   onAiCluster?: () => void;
   /** Replaces the selection (used by the type filter). */
   onSelect?: (ids: string[]) => void;
+  /** Saves the selected images, videos, PDFs and files; missing when there's nothing to save. */
+  onDownload?: () => void;
   members?: { id: string; name: string; color: string }[];
 }) {
   const [wheelFor, setWheelFor] = useState<"fill" | "stroke" | null>(null);
@@ -285,6 +287,7 @@ export function PropertiesBar({
       <button className="rounded-md p-1.5 hover:bg-slate-100" title={locked ? "Unlock" : "Lock"} onClick={() => setAll({ locked: !locked })}>
         {locked ? <Unlock size={16} /> : <Lock size={16} />}
       </button>
+      {onDownload && <button className="rounded-md p-1.5 hover:bg-slate-100" title="Download" aria-label="Download" onClick={onDownload}><Download size={16} /></button>}
       <button className="rounded-md p-1.5 hover:bg-slate-100" title="Duplicate (Ctrl+D)" onClick={onDuplicate}><Copy size={16} /></button>
       <button className="rounded-md p-1.5 text-rose-600 hover:bg-rose-50" title="Delete" onClick={onDelete}><Trash2 size={16} /></button>
     </div>

@@ -82,7 +82,8 @@ export interface ImageElement extends BaseElement {
   type: "image";
   src: string;
   /** Set for imported plans (PDF pages or images). */
-  plan?: { name: string; page?: number; /** width in PDF points (1/72 in) when imported from PDF */ paperWidthPt?: number };
+  plan?: { name: string; page?: number; /** width in PDF points (1/72 in) when imported from PDF */ paperWidthPt?: number;
+    /** The original PDF, kept so editors can download it. */ source?: string };
   scale?: PlanScale;
   /** Mirrored horizontally / vertically. */
   /** Animated GIF: played on the board. */
