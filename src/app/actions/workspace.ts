@@ -245,6 +245,28 @@ export async function createBoard(workspaceId: string, form: FormData) {
   redirect(`/board/${board.id}`);
 }
 
+/** Copies a board (its saved contents, folder, team and visibility) and opens the copy. */
+export async function duplicateBoard(boardId: string) {
+  const user = await requireUser();
+  const board = await db.board.findUniqueOrThrow({ where: { id: boardId } });
+  const access = await boardAccessForUser(user.id, board);
+  if (!access.canView || !atLeast(await workspaceRole(user.id, board.workspaceId), "MEMBER")) throw new Error("You don't have permission to do that");
+  const copy = await db.board.create({
+    data: {
+      workspaceId: board.workspaceId,
+      teamId: board.teamId,
+      folderId: board.folderId,
+      title: `${board.title} (copy)`.slice(0, 120),
+      createdById: user.id,
+      visibility: board.visibility,
+      shareToken: token(),
+      content: board.content ?? Buffer.from(initialBoardState("blank")),
+    },
+  });
+  await audit(board.workspaceId, user, "board.created", { type: "board", id: copy.id, name: copy.title }, { duplicatedFrom: board.id });
+  redirect(`/board/${copy.id}`);
+}
+
 // ── Folders ─────────────────────────────────────────────────────────────────
 
 export async function createFolder(workspaceId: string, form: FormData) {

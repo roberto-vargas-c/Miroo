@@ -20,6 +20,11 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
     ? (await db.workspaceMember.findMany({ where: { workspaceId: board.workspaceId }, select: { user: { select: { id: true, name: true, color: true } } } }))
         .map((m) => m.user).sort((a, b) => a.name.localeCompare(b.name))
     : [];
+  const [folders, starred, creator] = await Promise.all([
+    isMember ? db.folder.findMany({ where: { workspaceId: board.workspaceId }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [],
+    user ? db.boardStar.findUnique({ where: { userId_boardId: { userId: user.id, boardId: board.id } } }).then(Boolean) : false,
+    isMember ? db.user.findUnique({ where: { id: board.createdById }, select: { name: true } }) : null,
+  ]);
   return (
     <BoardApp
       boardId={board.id}
@@ -34,6 +39,12 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
       members={members}
       realtimeUrl={process.env.NEXT_PUBLIC_REALTIME_URL || "ws://localhost:1234"}
       ai={aiEnabled()}
+      starred={starred}
+      folders={folders}
+      details={isMember ? {
+        folderId: board.folderId, createdBy: creator?.name ?? null,
+        createdAt: board.createdAt.toISOString(), updatedAt: board.updatedAt.toISOString(),
+      } : null}
     />
   );
 }
