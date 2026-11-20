@@ -31,6 +31,7 @@ import { MiroDialog, MiroPasteDialog, getMiroToken, setMiroToken } from "./MiroI
 import { setDarkMode, useDarkMode } from "@/components/ThemeToggle";
 import { StickerPicker, STICKER_DRAG_TYPE, type StickerPick } from "./StickerPicker";
 import { PropertiesBar } from "./PropertiesBar";
+import { downloadsFor, runDownloads } from "./downloads";
 import { groupRemapper } from "./arrange";
 import { ShareDialog, type Sharing } from "./ShareDialog";
 import { CommentPanel, CommentPins, useComments } from "./Comments";
@@ -380,6 +381,18 @@ export function BoardApp(p: BoardAppProps) {
   }, [elements, selection, setSelection]);
 
   const selected = useMemo(() => elements.filter((e) => selection.includes(e.id)), [elements, selection]);
+  /** Saves the files behind the given elements (images, videos, PDFs, uploaded files). Editors only; the server checks too. */
+  const downloadSelection = async (els: BoardElement[]) => {
+    if (!canEdit) return;
+    const items = downloadsFor(els, elements);
+    if (!items.length) { setToast("Nothing to download in the selection."); return; }
+    try {
+      setToast(items.length > 1 ? `Downloading ${items.length} files…` : "Downloading…");
+      await runDownloads(items, p.boardId, p.shareToken, setToast);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Download failed");
+    }
+  };
 
   // ── Architecture: scale, units, plan import ──
   const unit: Unit = session.unit ?? "m";
@@ -424,6 +437,7 @@ export function BoardApp(p: BoardAppProps) {
         setImporting("Reading PDF…");
         const { renderPdf } = await import("./pdfImport");
         const pages = await renderPdf(file, (d, t) => setImporting(`Rendering ${d}/${t}…`));
+        const source = await uploadBlob(file, file.name).catch(() => undefined);
         let x = center.x - (pages[0]?.widthPt ?? 0) / 2;
         for (const pg of pages) {
           setImporting(`Uploading ${pg.page}/${pages.length}…`);
@@ -432,7 +446,7 @@ export function BoardApp(p: BoardAppProps) {
             width: pg.widthPt, height: pg.heightPt, fill: "transparent", stroke: "transparent", locked: true, z: baseZ + pg.page,
           }) as ImageElement;
           el.src = url;
-          el.plan = { name, page: pg.page, paperWidthPt: pg.widthPt };
+          el.plan = { name, page: pg.page, paperWidthPt: pg.widthPt, ...(source && { source }) };
           created.push(el);
           x += pg.widthPt + 120;
         }
@@ -547,6 +561,8 @@ export function BoardApp(p: BoardAppProps) {
             const { renderPdf } = await import("./pdfImport");
             const pages = await renderPdf(f, (d, t) => setImporting(`Rendering page ${d}/${t}${tag}…`), pdfSideFor(getQuality()));
             const name = f.name.replace(/\.[^.]+$/, "");
+            // The original file too, so editors can download the PDF itself and not only its pages.
+            const source = await uploadBlob(f, f.name).catch(() => undefined);
             const els: BoardElement[] = [];
             let x = 0;
             for (const pg of pages) {
@@ -555,7 +571,7 @@ export function BoardApp(p: BoardAppProps) {
               const k = Math.min(1, 900 / Math.max(pg.widthPt, pg.heightPt));
               const el = makeElement("image", x, 0, { width: pg.widthPt * k, height: pg.heightPt * k, fill: "transparent", stroke: "transparent" }) as ImageElement;
               el.src = url;
-              el.plan = { name, page: pg.page, paperWidthPt: pg.widthPt };
+              el.plan = { name, page: pg.page, paperWidthPt: pg.widthPt, ...(source && { source }) };
               els.push(el);
               x += el.width + 40;
             }
@@ -1004,7 +1020,13 @@ export function BoardApp(p: BoardAppProps) {
         unit={unit}
         placingSymbol={placingSymbol}
         placingShape={placingShape}
-        onOpenEmbed={(el) => { if (embedUrlFor(el.url)) setViewing(el); else window.open(el.url, "_blank", "noopener,noreferrer"); }}
+        onOpenEmbed={(el) => {
+          if (embedUrlFor(el.url)) setViewing(el);
+          // Uploaded files only open as downloads, which are for editors.
+          else if (el.url.startsWith("/api/assets/")) {
+            if (canEdit) downloadSelection([el]); else setToast("Only editors can download files from this board.");
+          } else window.open(el.url, "_blank", "noopener,noreferrer");
+        }}
         onCalibrate={(l) => setScaleDialog({ lengthPx: Math.hypot(l.x2 - l.x1, l.y2 - l.y1), plan: planAt({ x: (l.x1 + l.x2) / 2, y: (l.y1 + l.y2) / 2 }) })}
         onComment={(pt) => { setCommentDraft(pt); setCommentsOpen(true); setActiveComment(null); }}
         overlay={<>
@@ -1196,6 +1218,7 @@ export function BoardApp(p: BoardAppProps) {
         onQuality={reduceSelectedImages}
         onAiCluster={p.ai ? clusterByTheme : undefined}
         onSelect={setSelection}
+        onDownload={downloadsFor(selected, elements).length ? () => downloadSelection(selected) : undefined}
         onDelete={() => { api.remove(selection); setSelection([]); }} />}
 
       {/* Zoom */}
@@ -1334,7 +1357,8 @@ export function BoardApp(p: BoardAppProps) {
               <span className="truncate font-medium">{playingVideo.name || "Video"}</span>
               <button className="btn-ghost text-white hover:bg-white/10" onClick={() => setPlayingVideo(null)}><X size={16} /></button>
             </div>
-            <video src={playingVideo.src} controls autoPlay playsInline className="max-h-[80vh] w-full rounded-lg bg-black" />
+            <video src={playingVideo.src} controls autoPlay playsInline className="max-h-[80vh] w-full rounded-lg bg-black"
+              controlsList={canEdit ? undefined : "nodownload"} onContextMenu={canEdit ? undefined : (e) => e.preventDefault()} />
           </div>
         </div>
       )}
